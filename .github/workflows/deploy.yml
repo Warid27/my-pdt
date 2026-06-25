@@ -25,7 +25,7 @@ jobs:
 
       - name: Ensure Cloudflare Pages project exists
         run: |
-          if ! bunx wrangler pages project list | grep -q '^my-pdt'; then
+          if ! bunx wrangler pages project list --json | jq -e '.[] | select(.name == "my-pdt")' > /dev/null 2>&1; then
             bunx wrangler pages project create my-pdt --production-branch=main
           fi
         env:
