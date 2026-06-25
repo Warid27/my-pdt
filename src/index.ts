@@ -144,6 +144,10 @@ function createTelegramResponse(chatId: number | string, text: string): Response
   );
 }
 
+function isWalletDeletionRequest(text: string): boolean {
+  return /\b(hapus|delete|remove)\b.*\bwallet\b|\bwallet\b.*\b(hapus|delete|remove)\b/i.test(text);
+}
+
 async function sendAiReply(chatId: number | string, text: string, env: Env): Promise<void> {
   if (!env.TELEGRAM_TOKEN) {
     recordLog(env, "ai_skipped", "TELEGRAM_TOKEN is not configured");
@@ -156,6 +160,17 @@ async function sendAiReply(chatId: number | string, text: string, env: Env): Pro
       recordLog(env, "provider_missing", "Falling back to echo reply");
       await sendTelegramMessage({ chatId, text, token: env.TELEGRAM_TOKEN });
       recordLog(env, "telegram_sent", "Echo reply sent");
+      return;
+    }
+
+    if (isWalletDeletionRequest(text)) {
+      recordLog(env, "wallet_delete_blocked", logDetail({ chatId, message: text }));
+      await sendTelegramMessage({
+        chatId,
+        text: "Deleting wallets is not supported yet. Send 'lihat wallet' if you want the current list.",
+        token: env.TELEGRAM_TOKEN,
+      });
+      recordLog(env, "telegram_sent", logDetail({ kind: "wallet delete blocked", chatId }));
       return;
     }
 

@@ -827,6 +827,90 @@ describe("handleRequest", () => {
     expect(db.reminders[0].reminded_at).toBeString();
   });
 
+  it("does not treat delete wallet requests as create wallet actions", async () => {
+    const provider = {
+      BASE_URL: "https://api.example.com/v1",
+      NAME: "example-openai",
+      TYPE: "OPENAI" as const,
+      API_KEY: "provider-key",
+      MODEL_ID: "model-id",
+      MODEL_NAME: "Model Label",
+    };
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (String(url).includes("/chat/completions")) {
+        return Response.json({
+          choices: [
+            {
+              message: {
+                content: "",
+                tool_calls: [
+                  { function: { name: "create_new_wallet", arguments: JSON.stringify({ wallet_name: "kantong utama", initial_balance: 0 }) } },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    const result = await callOpenAiCompatible({ provider, message: "hapus wallet kantong utama" });
+    globalThis.fetch = originalFetch;
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe("create_new_wallet");
+  });
+
+  it("blocks wallet deletion requests before tool execution", async () => {
+    const providers = JSON.stringify([
+      {
+        BASE_URL: "https://api.example.com/v1",
+        NAME: "example-openai",
+        TYPE: "OPENAI",
+        API_KEY: "provider-key",
+        MODEL_ID: "model-id",
+        MODEL_NAME: "Model Label",
+      },
+    ]);
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (String(url).includes("/chat/completions")) {
+        throw new Error("should not call provider for delete requests");
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    try {
+      const response = await handleRequest(
+        new Request("https://example.com/webhook", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "X-Telegram-Bot-Api-Secret-Token": "secret",
+          },
+          body: JSON.stringify({ message: { chat: { id: 123 }, text: "hapus wallet kantong utama" } }),
+        }),
+        { TELEGRAM_WEBHOOK_SECRET: "secret", TELEGRAM_TOKEN: "telegram-token", PROVIDERS: providers },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls.map((call) => String(call.url))).toEqual(["https://api.telegram.org/bottelegram-token/sendMessage"]);
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      chat_id: 123,
+      text: "Deleting wallets is not supported yet. Send 'lihat wallet' if you want the current list.",
+    });
+  });
+
   it("acknowledges webhook requests and schedules AI replies when a token is configured", async () => {
     const providers = JSON.stringify([
       {
