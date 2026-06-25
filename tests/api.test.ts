@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { handleRequest, type Env } from "../src/index";
 import { handleApiRequest, parseSeededAccounts, withPagination, camelizeValue, type AuthEnv } from "../src/api";
 
 type AuthAccount = {
@@ -376,5 +377,29 @@ describe("api contract", () => {
     const accountsBody = (await accounts.json()) as { items: Array<{ email: string }>; page: number; pageSize: number };
     expect(accountsBody.items[0].email).toBe("owner@example.com");
     expect(accountsBody.pageSize).toBe(20);
+  });
+
+  it("protects OpenAPI with seeded account credentials", async () => {
+    const env: Env = {
+      TELEGRAM_WEBHOOK_SECRET: "secret",
+      AUTH_SEEDED_ACCOUNTS: JSON.stringify([{ email: "owner@example.com", password: "secret123", name: "Owner", role: "admin" }]),
+    };
+
+    const denied = await handleRequest(new Request("https://example.com/openapi.json"), env);
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get("www-authenticate")).toBe('Basic realm="OpenAPI"');
+
+    const wrongPassword = btoa("owner@example.com:wrong");
+    const rejected = await handleRequest(new Request("https://example.com/openapi.json", { headers: { authorization: `Basic ${wrongPassword}` } }), env);
+    expect(rejected.status).toBe(401);
+
+    const credentials = btoa("owner@example.com:secret123");
+    const response = await handleRequest(new Request("https://example.com/openapi.json", { headers: { authorization: `Basic ${credentials}` } }), env);
+    expect(response.status).toBe(200);
+    const spec = (await response.json()) as { openapi: string; paths: Record<string, unknown>; components: { securitySchemes: Record<string, unknown> } };
+    expect(spec.openapi).toBe("3.1.0");
+    expect(spec.paths["/api/auth/login"]).toBeDefined();
+    expect(spec.paths["/api/finance/list"]).toBeDefined();
+    expect(spec.components.securitySchemes.basicAuth).toEqual({ type: "http", scheme: "basic" });
   });
 });

@@ -27,6 +27,7 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 - `GET /api/finance/summary`
 - `GET /api/finance/list`
 - `GET /api/finance/statistics`
+- `GET /openapi.json`
 
 All `/api/*` read endpoints require `Authorization: Bearer <accessToken>` and return camelCase JSON. List endpoints use the shared pagination contract:
 
@@ -172,6 +173,8 @@ Debt reminder helpers are implemented in code, but scheduled notifications requi
 ## API Notes
 
 The frontend API uses seeded accounts only: there is no self-service registration endpoint. Login returns `accessToken` and `refreshToken`, refresh rotates both tokens, and logout revokes the current session.
+
+`GET /openapi.json` returns the OpenAPI 3.1 contract for frontend tooling and client generation. It is protected with HTTP Basic auth using the same seeded account email and password from `AUTH_SEEDED_ACCOUNTS`.
 
 ## Telegram Webhook Setup
 

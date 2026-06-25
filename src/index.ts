@@ -7,6 +7,7 @@ import {
   markReminderSent,
 } from "./finance";
 import { handleApiRequest, type AuthEnv } from "./api";
+import { handleOpenApiRequest } from "./openapi";
 import { callProvider, parseProviders, ProviderError, selectProvider } from "./providers";
 import { sendTelegramMessage } from "./telegram";
 
@@ -388,6 +389,10 @@ async function handleRequest(request: Request, env: Env, ctx?: ExecutionContextL
 
   if (request.method === "GET" && url.pathname === "/logs") {
     return handleLogs(url, env);
+  }
+
+  if (url.pathname === "/openapi.json") {
+    return handleOpenApiRequest(request, env);
   }
 
   if (url.pathname.startsWith("/api/")) {
