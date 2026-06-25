@@ -64,10 +64,10 @@ The workflow creates the `my-pdt` Pages project if it does not already exist, th
 
 Required Cloudflare Pages settings after the first deploy:
 
-- Production environment variable: `TELEGRAM_WEBHOOK_SECRET`
+- Production secret: `TELEGRAM_WEBHOOK_SECRET`
 - Custom domain: `my-pdt.warid.web.id`
 
-The repository includes `public/CNAME` with `my-pdt.warid.web.id`, but Cloudflare Pages still needs the custom domain connected in the Cloudflare dashboard or through Cloudflare's API.
+Add `TELEGRAM_WEBHOOK_SECRET` as a Cloudflare Pages Secret, not as a plain variable in `wrangler.jsonc`. The repository includes `public/CNAME` with `my-pdt.warid.web.id`, but Cloudflare Pages still needs the custom domain connected in the Cloudflare dashboard or through Cloudflare's API.
 
 ## Telegram Webhook Setup
 
