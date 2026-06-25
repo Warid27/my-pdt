@@ -96,9 +96,19 @@ Required Cloudflare Pages settings after the first deploy:
 - Production secret: `TELEGRAM_WEBHOOK_SECRET`
 - Production secret: `TELEGRAM_TOKEN`
 - Production secret: `PROVIDERS`
+- D1 binding: `DB`
 - Custom domain: `my-pdt.warid.web.id`
 
 Add runtime credentials as Cloudflare Pages Secrets, not as plain variables in `wrangler.jsonc`. The repository includes `public/CNAME` with `my-pdt.warid.web.id`, but Cloudflare Pages still needs the custom domain connected in the Cloudflare dashboard or through Cloudflare's API.
+
+Create and migrate the D1 database before expecting durable logs:
+
+```bash
+bunx wrangler d1 create my-pdt
+bunx wrangler d1 migrations apply my-pdt --remote
+```
+
+After `wrangler d1 create`, copy the returned `database_id` into a D1 binding named `DB` for the `my-pdt` database.
 
 ## Telegram Webhook Setup
 

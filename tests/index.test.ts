@@ -1,7 +1,56 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { clearLogs, createTelegramResponse, handleRequest, isTelegramUpdate } from "../src/index";
+import {
+  clearLogs,
+  createTelegramResponse,
+  handleRequest,
+  isTelegramUpdate,
+  readLogs,
+  recordLog,
+  type Env,
+} from "../src/index";
 import { callAnthropicCompatible, callOpenAiCompatible, parseProviders, selectProvider } from "../src/providers";
 import { sendTelegramMessage } from "../src/telegram";
+
+type MockD1Database = {
+  rows: Array<{ id: number; at: string; event: string; detail?: string }>;
+  prepare(query: string): {
+    bind(...values: unknown[]): {
+      run(): Promise<void>;
+    };
+    all<T>(): Promise<{ results: T[] }>;
+  };
+};
+
+function createMockD1(): MockD1Database {
+  const db: MockD1Database = {
+    rows: [],
+    prepare(query: string) {
+      return {
+        bind(...values: unknown[]) {
+          return {
+            async run() {
+              if (!query.startsWith("INSERT INTO logs")) {
+                return;
+              }
+
+              db.rows.push({
+                id: db.rows.length + 1,
+                at: String(values[0]),
+                event: String(values[1]),
+                detail: values[2] === null ? undefined : String(values[2]),
+              });
+            },
+          };
+        },
+        async all<T>() {
+          return { results: [...db.rows].reverse().slice(0, 100) as T[] };
+        },
+      };
+    },
+  };
+
+  return db;
+}
 
 beforeEach(() => {
   clearLogs();
@@ -183,6 +232,21 @@ describe("handleRequest", () => {
 
     expect(body.logs.map((log) => log.event)).toEqual(["webhook_received", "webhook_inline_echo"]);
     expect(body.logs[0].detail).toBe("chat:123");
+  });
+
+  it("persists logs to d1 when bound", async () => {
+    const db = createMockD1();
+    const env: Env = {
+      TELEGRAM_WEBHOOK_SECRET: "secret",
+      DB: db as unknown as D1Database,
+    };
+
+    await recordLog(env, "test_event", "detail");
+    const logs = await readLogs(env);
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0].event).toBe("test_event");
+    expect(db.rows[0].event).toBe("test_event");
   });
 
   it("acknowledges webhook requests and schedules AI replies when a token is configured", async () => {

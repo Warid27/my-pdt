@@ -2,5 +2,13 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "my-pdt",
   "compatibility_date": "2026-06-25",
-  "pages_build_output_dir": "public"
+  "pages_build_output_dir": "public",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "my-pdt",
+      "database_id": "b68417a8-621c-4707-94eb-59be7556564b",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
