@@ -1,3 +1,11 @@
+import {
+  executeFinanceToolCall,
+  getDueReminders,
+  getFinanceBalances,
+  getLedger,
+  getReminders,
+  markReminderSent,
+} from "./finance";
 import { callProvider, parseProviders, selectProvider } from "./providers";
 import { sendTelegramMessage } from "./telegram";
 
@@ -15,12 +23,18 @@ type TelegramUpdate = {
 type Env = {
   TELEGRAM_WEBHOOK_SECRET: string;
   TELEGRAM_TOKEN?: string;
+  TELEGRAM_REMINDER_CHAT_ID?: string;
   PROVIDERS?: string;
   DB?: D1Database;
 };
 
 type ExecutionContextLike = {
   waitUntil(promise: Promise<unknown>): void;
+};
+
+type ScheduledControllerLike = {
+  scheduledTime: number;
+  cron: string;
 };
 
 type LogEntry = {
@@ -120,8 +134,13 @@ async function sendAiReply(chatId: number | string, text: string, env: Env): Pro
     let replyText: string;
     try {
       const result = await callProvider({ provider, message: text });
-      replyText = result.text;
-      recordLog(env, "provider_reply", provider.NAME);
+      const toolResults = [];
+      for (const toolCall of result.toolCalls) {
+        toolResults.push(await executeFinanceToolCall(env, toolCall.name, toolCall.arguments));
+      }
+
+      replyText = toolResults.length > 0 ? toolResults.map((item) => item.text).join("\n") : result.text;
+      recordLog(env, toolResults.length > 0 ? "finance_tools_executed" : "provider_reply", provider.NAME);
     } catch {
       replyText = "Sorry, I couldn't generate a reply right now.";
       recordLog(env, "provider_error", provider.NAME);
@@ -196,6 +215,58 @@ async function handleLogs(url: URL, env: Env): Promise<Response> {
   return Response.json({ logs: await readLogs(env) });
 }
 
+function isAuthorizedFinanceRequest(url: URL, env: Env): boolean {
+  return Boolean(env.TELEGRAM_WEBHOOK_SECRET && url.searchParams.get("token") === env.TELEGRAM_WEBHOOK_SECRET);
+}
+
+async function handleFinanceRequest(request: Request, url: URL, env: Env): Promise<Response> {
+  if (!isAuthorizedFinanceRequest(url, env)) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  if (request.method === "GET" && url.pathname === "/finance/balances") {
+    return Response.json(await getFinanceBalances(env));
+  }
+
+  if (request.method === "GET" && url.pathname === "/finance/ledger") {
+    const limit = Number(url.searchParams.get("limit") ?? 100);
+    return Response.json({ ledger: await getLedger(env, Number.isFinite(limit) ? limit : 100) });
+  }
+
+  if (request.method === "GET" && url.pathname === "/finance/reminders") {
+    return Response.json({ reminders: await getReminders(env, url.searchParams.get("includePaid") === "true") });
+  }
+
+  return new Response("Not Found", { status: 404 });
+}
+
+async function sendDueReminders(env: Env): Promise<void> {
+  if (!env.TELEGRAM_TOKEN) {
+    recordLog(env, "reminders_skipped", "TELEGRAM_TOKEN is not configured");
+    return;
+  }
+
+  const chatId = env.TELEGRAM_REMINDER_CHAT_ID;
+  if (!chatId) {
+    recordLog(env, "reminders_skipped", "TELEGRAM_REMINDER_CHAT_ID is not configured");
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const reminders = await getDueReminders(env, today);
+  for (const reminder of reminders) {
+    const text = `Reminder: ${reminder.direction === "owe" ? "you owe" : "owed to you by"} ${reminder.person} ${reminder.amount.toLocaleString("id-ID")}.`;
+    await sendTelegramMessage({ chatId, text, token: env.TELEGRAM_TOKEN });
+    await markReminderSent(env, reminder.id);
+  }
+
+  recordLog(env, "reminders_sent", String(reminders.length));
+}
+
+async function handleScheduled(_controller: ScheduledControllerLike, env: Env, ctx: ExecutionContextLike): Promise<void> {
+  ctx.waitUntil(sendDueReminders(env));
+}
+
 async function handleRequest(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
 
@@ -205,6 +276,10 @@ async function handleRequest(request: Request, env: Env, ctx?: ExecutionContextL
 
   if (request.method === "GET" && url.pathname === "/logs") {
     return handleLogs(url, env);
+  }
+
+  if (url.pathname.startsWith("/finance/")) {
+    return handleFinanceRequest(request, url, env);
   }
 
   if (request.method === "POST" && url.pathname === "/webhook") {
@@ -218,19 +293,24 @@ export default {
   fetch(request: Request, env: Env, ctx: ExecutionContextLike) {
     return handleRequest(request, env, ctx);
   },
+  scheduled(controller: ScheduledControllerLike, env: Env, ctx: ExecutionContextLike) {
+    return handleScheduled(controller, env, ctx);
+  },
 };
 
 export {
   addLog,
   clearLogs,
   createTelegramResponse,
+  handleFinanceRequest,
   handleHealth,
   handleLogs,
   handleRequest,
+  handleScheduled,
   handleWebhook,
   isTelegramUpdate,
   readLogs,
   recordLog,
   sendAiReply,
 };
-export type { Env, ExecutionContextLike, LogEntry, TelegramUpdate };
+export type { Env, ExecutionContextLike, LogEntry, ScheduledControllerLike, TelegramUpdate };

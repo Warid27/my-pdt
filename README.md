@@ -14,11 +14,15 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 - `POST /webhook`
 - `GET /health`
 - `GET /logs?token=<TELEGRAM_WEBHOOK_SECRET>`
+- `GET /finance/balances?token=<TELEGRAM_WEBHOOK_SECRET>`
+- `GET /finance/ledger?token=<TELEGRAM_WEBHOOK_SECRET>`
+- `GET /finance/reminders?token=<TELEGRAM_WEBHOOK_SECRET>`
 
 ## Environment Variables
 
 - `TELEGRAM_WEBHOOK_SECRET` - secret passed to Telegram `setWebhook` as `secret_token`
 - `TELEGRAM_TOKEN` - bot token from BotFather, used for outbound `sendMessage`
+- `TELEGRAM_REMINDER_CHAT_ID` - chat ID for scheduled debt reminder notifications
 - `PROVIDERS` - JSON array of AI providers
 
 Example provider config:
@@ -65,6 +69,7 @@ The first valid provider in `PROVIDERS` is used for replies.
    ```env
    TELEGRAM_WEBHOOK_SECRET=your-random-secret
    TELEGRAM_TOKEN=your-telegram-bot-token
+   TELEGRAM_REMINDER_CHAT_ID=your-telegram-chat-id
    PROVIDERS='[{"BASE_URL":"https://api.openai.com/v1","NAME":"openai","TYPE":"OPENAI","API_KEY":"your-provider-api-key","MODEL_ID":"gpt-4o-mini","MODEL_NAME":"GPT-4o mini"}]'
    ```
 
@@ -95,13 +100,14 @@ Required Cloudflare Pages settings after the first deploy:
 
 - Production secret: `TELEGRAM_WEBHOOK_SECRET`
 - Production secret: `TELEGRAM_TOKEN`
+- Production secret: `TELEGRAM_REMINDER_CHAT_ID`
 - Production secret: `PROVIDERS`
 - D1 binding: `DB`
 - Custom domain: `my-pdt.warid.web.id`
 
 Add runtime credentials as Cloudflare Pages Secrets, not as plain variables in `wrangler.jsonc`. The repository includes `public/CNAME` with `my-pdt.warid.web.id`, but Cloudflare Pages still needs the custom domain connected in the Cloudflare dashboard or through Cloudflare's API.
 
-Create and migrate the D1 database before expecting durable logs:
+Create and migrate the D1 database before expecting durable logs or finance data:
 
 ```bash
 bunx wrangler d1 create my-pdt
@@ -109,6 +115,37 @@ bunx wrangler d1 migrations apply my-pdt --remote
 ```
 
 After `wrangler d1 create`, copy the returned `database_id` into a D1 binding named `DB` for the `my-pdt` database.
+
+## Finance Feature
+
+The finance feature records personal finance events in D1 using double-entry ledger rows. The AI provider receives a finance system prompt plus allowlisted tools, but the backend owns account routing and database writes.
+
+Supported finance tool actions:
+
+- `record_transaction` for expenses, income, gifts, lending, borrowing, and repayments
+- `create_new_wallet` after explicit user confirmation
+- `get_wallets` and `get_debts_summary` for lookup and clarification
+- `add_reminder` and `settle_reminder_by_context` for debt reminders
+
+Account names follow these conventions:
+
+- `assets:wallets:<wallet_name>`
+- `assets:receivables:<person_name>`
+- `liabilities:payables:<person_name>`
+- `expenses:<category>`
+- `income:<source>`
+
+Unknown wallets are not created automatically during transaction recording. The bot should ask whether to create the wallet first. Person-specific receivable/payable accounts are provisioned automatically by the backend.
+
+Finance read endpoints are protected with the same token pattern as `/logs`:
+
+```text
+https://my-pdt.warid.web.id/finance/balances?token=<TELEGRAM_WEBHOOK_SECRET>
+https://my-pdt.warid.web.id/finance/ledger?token=<TELEGRAM_WEBHOOK_SECRET>
+https://my-pdt.warid.web.id/finance/reminders?token=<TELEGRAM_WEBHOOK_SECRET>
+```
+
+Debt reminder helpers are implemented in code, but scheduled notifications require a Worker cron trigger. This project currently deploys as Cloudflare Pages Functions, so run reminder scanning from a Worker deployment or migrate the runtime before relying on automatic daily notifications. Set `TELEGRAM_REMINDER_CHAT_ID` to the Telegram chat that should receive due reminder notifications.
 
 ## Telegram Webhook Setup
 
