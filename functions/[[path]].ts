@@ -1,5 +1,9 @@
-import { handleRequest, type Env } from "../src/index";
+import { handleRequest, type Env, type ExecutionContextLike } from "../src/index";
 
-export const onRequest: PagesFunction<Env> = ({ request, env }) => {
-  return handleRequest(request, env);
+export const onRequest: PagesFunction<Env> = (context) => {
+  const ctx: ExecutionContextLike = {
+    waitUntil: (promise) => context.waitUntil(promise),
+  };
+
+  return handleRequest(context.request, context.env, ctx);
 };

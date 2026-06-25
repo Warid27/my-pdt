@@ -7,6 +7,7 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 - Bun
 - Cloudflare Pages Functions
 - Telegram Bot API (webhook mode)
+- OpenAI-compatible and Anthropic-compatible chat providers
 
 ## Endpoints
 
@@ -16,8 +17,33 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 ## Environment Variables
 
 - `TELEGRAM_WEBHOOK_SECRET` - secret passed to Telegram `setWebhook` as `secret_token`
+- `TELEGRAM_TOKEN` - bot token from BotFather, used for outbound `sendMessage`
+- `PROVIDERS` - JSON array of AI providers
 
-`TELEGRAM_TOKEN` is only needed when registering the webhook with Telegram. The runtime currently replies using Telegram's inline webhook response format, so it does not need the bot token at request time.
+Example provider config:
+
+```json
+[
+  {
+    "BASE_URL": "https://api.openai.com/v1",
+    "NAME": "openai",
+    "TYPE": "OPENAI",
+    "API_KEY": "provider-api-key",
+    "MODEL_ID": "gpt-4o-mini",
+    "MODEL_NAME": "GPT-4o mini"
+  },
+  {
+    "BASE_URL": "https://api.anthropic.com/v1",
+    "NAME": "anthropic",
+    "TYPE": "ANTHROPIC",
+    "API_KEY": "provider-api-key",
+    "MODEL_ID": "claude-3-5-haiku-latest",
+    "MODEL_NAME": "Claude 3.5 Haiku"
+  }
+]
+```
+
+The first valid provider in `PROVIDERS` is used for replies.
 
 ## Local Development
 
@@ -37,6 +63,8 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 
    ```env
    TELEGRAM_WEBHOOK_SECRET=your-random-secret
+   TELEGRAM_TOKEN=your-telegram-bot-token
+   PROVIDERS='[{"BASE_URL":"https://api.openai.com/v1","NAME":"openai","TYPE":"OPENAI","API_KEY":"your-provider-api-key","MODEL_ID":"gpt-4o-mini","MODEL_NAME":"GPT-4o mini"}]'
    ```
 
 4. Run tests:
@@ -60,14 +88,16 @@ Required GitHub repository secrets:
 - `CLOUDFLARE_API_TOKEN` - Cloudflare API token with Cloudflare Pages edit/deploy access
 - `CLOUDFLARE_ACCOUNT_ID` - Cloudflare account ID
 
-The workflow creates the `my-pdt` Pages project if it does not already exist, then deploys `public` with Pages Functions from `functions/`.
+The workflow deploys `public` to the existing `my-pdt` Cloudflare Pages project with Pages Functions from `functions/`.
 
 Required Cloudflare Pages settings after the first deploy:
 
 - Production secret: `TELEGRAM_WEBHOOK_SECRET`
+- Production secret: `TELEGRAM_TOKEN`
+- Production secret: `PROVIDERS`
 - Custom domain: `my-pdt.warid.web.id`
 
-Add `TELEGRAM_WEBHOOK_SECRET` as a Cloudflare Pages Secret, not as a plain variable in `wrangler.jsonc`. The repository includes `public/CNAME` with `my-pdt.warid.web.id`, but Cloudflare Pages still needs the custom domain connected in the Cloudflare dashboard or through Cloudflare's API.
+Add runtime credentials as Cloudflare Pages Secrets, not as plain variables in `wrangler.jsonc`. The repository includes `public/CNAME` with `my-pdt.warid.web.id`, but Cloudflare Pages still needs the custom domain connected in the Cloudflare dashboard or through Cloudflare's API.
 
 ## Telegram Webhook Setup
 
@@ -85,4 +115,4 @@ https://api.telegram.org/bot<TELEGRAM_TOKEN>/getWebhookInfo
 
 ## Notes
 
-The Pages Function validates `X-Telegram-Bot-Api-Secret-Token` and replies to Telegram webhook calls with an inline `sendMessage` payload.
+The Pages Function validates `X-Telegram-Bot-Api-Secret-Token`, quickly acknowledges valid webhook requests, and sends AI replies through Telegram Bot API `sendMessage`. If `TELEGRAM_TOKEN` is not configured, it falls back to the original inline echo response.
