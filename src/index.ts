@@ -6,7 +6,7 @@ import {
   getReminders,
   markReminderSent,
 } from "./finance";
-import { callProvider, parseProviders, selectProvider } from "./providers";
+import { callProvider, parseProviders, ProviderError, selectProvider } from "./providers";
 import { sendTelegramMessage } from "./telegram";
 
 type TelegramMessage = {
@@ -82,6 +82,34 @@ function clearLogs(): void {
   logs.splice(0, logs.length);
 }
 
+function truncateText(value: string, maxLength = 2000): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...<truncated:${value.length}>` : value;
+}
+
+function redactSensitive(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSensitive(item));
+  }
+
+  if (!value || typeof value !== "object") {
+    return typeof value === "string" ? truncateText(value) : value;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/^(api[_-]?key|token|authorization|secret|password|x-api-key)$/i.test(key)) {
+      result[key] = "<redacted>";
+      continue;
+    }
+    result[key] = redactSensitive(item);
+  }
+  return result;
+}
+
+function logDetail(value: unknown): string {
+  return truncateText(JSON.stringify(redactSensitive(value)));
+}
+
 function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   if (!value || typeof value !== "object") {
     return false;
@@ -131,25 +159,58 @@ async function sendAiReply(chatId: number | string, text: string, env: Env): Pro
       return;
     }
 
+    recordLog(
+      env,
+      "ai_request",
+      logDetail({ chatId, provider: provider.NAME, type: provider.TYPE, model: provider.MODEL_ID, message: text }),
+    );
+
     let replyText: string;
     try {
+      const started = Date.now();
       const result = await callProvider({ provider, message: text });
+      recordLog(
+        env,
+        "ai_response",
+        logDetail({
+          provider: provider.NAME,
+          model: provider.MODEL_ID,
+          duration_ms: Date.now() - started,
+          text: result.text,
+          tool_calls: result.toolCalls,
+          usage: result.usage,
+          raw_response: result.rawResponse,
+        }),
+      );
+
       const toolResults = [];
       for (const toolCall of result.toolCalls) {
-        toolResults.push(await executeFinanceToolCall(env, toolCall.name, toolCall.arguments));
+        recordLog(env, "finance_tool_call", logDetail({ name: toolCall.name, arguments: toolCall.arguments }));
+        const toolResult = await executeFinanceToolCall(env, toolCall.name, toolCall.arguments);
+        toolResults.push(toolResult);
+        recordLog(env, "finance_tool_result", logDetail({ name: toolCall.name, result: toolResult }));
       }
 
       replyText = toolResults.length > 0 ? toolResults.map((item) => item.text).join("\n") : result.text;
       recordLog(env, toolResults.length > 0 ? "finance_tools_executed" : "provider_reply", provider.NAME);
-    } catch {
+    } catch (error) {
       replyText = "Sorry, I couldn't generate a reply right now.";
-      recordLog(env, "provider_error", provider.NAME);
+      recordLog(
+        env,
+        "provider_error",
+        logDetail({
+          provider: provider.NAME,
+          message: error instanceof Error ? error.message : String(error),
+          status: error instanceof ProviderError ? error.status : undefined,
+          body: error instanceof ProviderError ? error.body : undefined,
+        }),
+      );
     }
 
     await sendTelegramMessage({ chatId, text: replyText, token: env.TELEGRAM_TOKEN });
-    recordLog(env, "telegram_sent", "AI reply sent");
-  } catch {
-    recordLog(env, "telegram_error", "Failed to send reply");
+    recordLog(env, "telegram_sent", logDetail({ kind: "AI reply sent", chatId, text: replyText }));
+  } catch (error) {
+    recordLog(env, "telegram_error", logDetail({ message: error instanceof Error ? error.message : String(error) }));
     return;
   }
 }

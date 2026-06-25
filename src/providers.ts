@@ -23,7 +23,29 @@ type ChatRequest = {
 type ChatResult = {
   text: string;
   toolCalls: FinanceToolCall[];
+  rawResponse: unknown;
+  usage?: unknown;
 };
+
+type ProviderErrorOptions = {
+  provider: string;
+  status?: number;
+  body?: unknown;
+};
+
+class ProviderError extends Error {
+  provider: string;
+  status?: number;
+  body?: unknown;
+
+  constructor(message: string, options: ProviderErrorOptions) {
+    super(message);
+    this.name = "ProviderError";
+    this.provider = options.provider;
+    this.status = options.status;
+    this.body = options.body;
+  }
+}
 
 function isProviderType(value: string): value is ProviderType {
   return value === "OPENAI" || value === "ANTHROPIC";
@@ -171,20 +193,34 @@ async function callOpenAiCompatible({
   });
 
   if (!response.ok) {
-    throw new Error(`Provider ${provider.NAME} returned ${response.status}`);
+    let errorBody: unknown;
+    try {
+      errorBody = await response.json();
+    } catch {
+      errorBody = await response.text();
+    }
+    throw new ProviderError(`Provider ${provider.NAME} returned ${response.status}`, {
+      provider: provider.NAME,
+      status: response.status,
+      body: errorBody,
+    });
   }
 
   const body = (await response.json()) as {
     choices?: Array<{ message?: { content?: string; tool_calls?: unknown } }>;
+    usage?: unknown;
   };
   const providerMessage = body.choices?.[0]?.message;
   const text = providerMessage?.content?.trim() ?? "";
   const toolCalls = parseOpenAiToolCalls(providerMessage?.tool_calls);
   if (!text && toolCalls.length === 0) {
-    throw new Error(`Provider ${provider.NAME} returned an empty response`);
+    throw new ProviderError(`Provider ${provider.NAME} returned an empty response`, {
+      provider: provider.NAME,
+      body,
+    });
   }
 
-  return { text, toolCalls };
+  return { text, toolCalls, rawResponse: body, usage: body.usage };
 }
 
 async function callAnthropicCompatible({
@@ -215,19 +251,33 @@ async function callAnthropicCompatible({
   });
 
   if (!response.ok) {
-    throw new Error(`Provider ${provider.NAME} returned ${response.status}`);
+    let errorBody: unknown;
+    try {
+      errorBody = await response.json();
+    } catch {
+      errorBody = await response.text();
+    }
+    throw new ProviderError(`Provider ${provider.NAME} returned ${response.status}`, {
+      provider: provider.NAME,
+      status: response.status,
+      body: errorBody,
+    });
   }
 
   const body = (await response.json()) as {
     content?: Array<{ type?: string; text?: string; name?: string; input?: unknown }>;
+    usage?: unknown;
   };
   const text = body.content?.find((item) => item.type === "text" && item.text)?.text?.trim() ?? "";
   const toolCalls = parseAnthropicToolCalls(body.content);
   if (!text && toolCalls.length === 0) {
-    throw new Error(`Provider ${provider.NAME} returned an empty response`);
+    throw new ProviderError(`Provider ${provider.NAME} returned an empty response`, {
+      provider: provider.NAME,
+      body,
+    });
   }
 
-  return { text, toolCalls };
+  return { text, toolCalls, rawResponse: body, usage: body.usage };
 }
 
 function callProvider(request: ChatRequest): Promise<ChatResult> {
@@ -245,6 +295,7 @@ export {
   parseAnthropicToolCalls,
   parseOpenAiToolCalls,
   parseProviders,
+  ProviderError,
   selectProvider,
 };
 export type { ChatResult, ProviderConfig, ProviderType };

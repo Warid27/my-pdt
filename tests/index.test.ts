@@ -651,6 +651,7 @@ describe("handleRequest", () => {
               },
             },
           ],
+          usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
         });
       }
       return Response.json({ ok: true });
@@ -686,6 +687,12 @@ describe("handleRequest", () => {
       chat_id: 123,
       text: "Recorded: bakso 10.000.",
     });
+
+    const logs = await readLogs(env);
+    const aiResponse = logs.find((log) => log.event === "ai_response");
+    const toolCall = logs.find((log) => log.event === "finance_tool_call");
+    expect(aiResponse?.detail).toContain('"prompt_tokens":20');
+    expect(toolCall?.detail).toContain('"wallet_name":"cash"');
   });
 
   it("schedules due reminder notifications", async () => {
