@@ -17,6 +17,21 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 - `GET /finance/balances?token=<TELEGRAM_WEBHOOK_SECRET>`
 - `GET /finance/ledger?token=<TELEGRAM_WEBHOOK_SECRET>`
 - `GET /finance/reminders?token=<TELEGRAM_WEBHOOK_SECRET>`
+- `POST /api/auth/login`
+- `POST /api/auth/refresh`
+- `POST /api/auth/logout`
+- `GET /api/me`
+- `GET /api/accounts`
+- `GET /api/accounts/:id`
+- `GET /api/dashboard`
+- `GET /api/finance/summary`
+- `GET /api/finance/list`
+- `GET /api/finance/statistics`
+
+All `/api/*` read endpoints require `Authorization: Bearer <accessToken>` and return camelCase JSON. List endpoints use the shared pagination contract:
+
+- query params: `page`, `pageSize`
+- response fields: `items`, `page`, `pageSize`, `total`, `totalPages`
 
 ## Environment Variables
 
@@ -24,8 +39,9 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 - `TELEGRAM_TOKEN` - bot token from BotFather, used for outbound `sendMessage`
 - `TELEGRAM_REMINDER_CHAT_ID` - chat ID for scheduled debt reminder notifications
 - `PROVIDERS` - JSON array of AI providers
+- `AUTH_SEEDED_ACCOUNTS` - JSON array of seeded login accounts for the API surface
 
-Example provider config:
+Example provider and seeded-account config:
 
 ```json
 [
@@ -36,19 +52,23 @@ Example provider config:
     "API_KEY": "provider-api-key",
     "MODEL_ID": "gpt-4o-mini",
     "MODEL_NAME": "GPT-4o mini"
-  },
-  {
-    "BASE_URL": "https://api.anthropic.com/v1",
-    "NAME": "anthropic",
-    "TYPE": "ANTHROPIC",
-    "API_KEY": "provider-api-key",
-    "MODEL_ID": "claude-3-5-haiku-latest",
-    "MODEL_NAME": "Claude 3.5 Haiku"
   }
 ]
 ```
 
-The first valid provider in `PROVIDERS` is used for replies.
+```json
+[
+  {
+    "email": "owner@example.com",
+    "password": "replace-with-a-random-generated-password",
+    "name": "Owner",
+    "role": "admin"
+  }
+]
+```
+
+
+Use a random generated password for production seeded accounts and store it only as a Cloudflare Pages secret. The first valid provider in `PROVIDERS` is used for replies.
 
 ## Local Development
 
@@ -70,6 +90,7 @@ The first valid provider in `PROVIDERS` is used for replies.
    TELEGRAM_WEBHOOK_SECRET=your-random-secret
    TELEGRAM_TOKEN=your-telegram-bot-token
    TELEGRAM_REMINDER_CHAT_ID=your-telegram-chat-id
+   AUTH_SEEDED_ACCOUNTS='[{"email":"owner@example.com","password":"replace-with-a-random-generated-password","name":"Owner","role":"admin"}]'
    PROVIDERS='[{"BASE_URL":"https://api.openai.com/v1","NAME":"openai","TYPE":"OPENAI","API_KEY":"your-provider-api-key","MODEL_ID":"gpt-4o-mini","MODEL_NAME":"GPT-4o mini"}]'
    ```
 
@@ -102,12 +123,13 @@ Required Cloudflare Pages settings after the first deploy:
 - Production secret: `TELEGRAM_TOKEN`
 - Production secret: `TELEGRAM_REMINDER_CHAT_ID`
 - Production secret: `PROVIDERS`
+- Production secret: `AUTH_SEEDED_ACCOUNTS`
 - D1 binding: `DB`
 - Custom domain: `my-pdt.warid.web.id`
 
 Add runtime credentials as Cloudflare Pages Secrets, not as plain variables in `wrangler.jsonc`. The repository includes `public/CNAME` with `my-pdt.warid.web.id`, but Cloudflare Pages still needs the custom domain connected in the Cloudflare dashboard or through Cloudflare's API.
 
-Create and migrate the D1 database before expecting durable logs or finance data:
+Create and migrate the D1 database before expecting durable logs, finance data, or seeded API auth:
 
 ```bash
 bunx wrangler d1 create my-pdt
@@ -146,6 +168,10 @@ https://my-pdt.warid.web.id/finance/reminders?token=<TELEGRAM_WEBHOOK_SECRET>
 ```
 
 Debt reminder helpers are implemented in code, but scheduled notifications require a Worker cron trigger. This project currently deploys as Cloudflare Pages Functions, so run reminder scanning from a Worker deployment or migrate the runtime before relying on automatic daily notifications. Set `TELEGRAM_REMINDER_CHAT_ID` to the Telegram chat that should receive due reminder notifications.
+
+## API Notes
+
+The frontend API uses seeded accounts only: there is no self-service registration endpoint. Login returns `accessToken` and `refreshToken`, refresh rotates both tokens, and logout revokes the current session.
 
 ## Telegram Webhook Setup
 

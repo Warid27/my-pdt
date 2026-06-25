@@ -6,6 +6,7 @@ import {
   getReminders,
   markReminderSent,
 } from "./finance";
+import { handleApiRequest, type AuthEnv } from "./api";
 import { callProvider, parseProviders, ProviderError, selectProvider } from "./providers";
 import { sendTelegramMessage } from "./telegram";
 
@@ -25,6 +26,7 @@ type Env = {
   TELEGRAM_TOKEN?: string;
   TELEGRAM_REMINDER_CHAT_ID?: string;
   PROVIDERS?: string;
+  AUTH_SEEDED_ACCOUNTS?: string;
   DB?: D1Database;
 };
 
@@ -386,6 +388,10 @@ async function handleRequest(request: Request, env: Env, ctx?: ExecutionContextL
 
   if (request.method === "GET" && url.pathname === "/logs") {
     return handleLogs(url, env);
+  }
+
+  if (url.pathname.startsWith("/api/")) {
+    return handleApiRequest(request, env as AuthEnv);
   }
 
   if (url.pathname.startsWith("/finance/")) {

@@ -1,4 +1,5 @@
 TELEGRAM_WEBHOOK_SECRET=
 TELEGRAM_TOKEN=
 TELEGRAM_REMINDER_CHAT_ID=
+AUTH_SEEDED_ACCOUNTS='[{"email":"owner@example.com","password":"replace-with-a-random-generated-password","name":"Owner","role":"admin"}]'
 PROVIDERS='[{"BASE_URL":"https://api.openai.com/v1","NAME":"openai","TYPE":"OPENAI","API_KEY":"replace-me","MODEL_ID":"gpt-4o-mini","MODEL_NAME":"GPT-4o mini"}]'
