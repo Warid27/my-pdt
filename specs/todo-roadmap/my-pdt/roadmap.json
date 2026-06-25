@@ -1,0 +1,109 @@
+{
+  "projectId": "my-pdt",
+  "description": "Lightweight Telegram bot service on Bun and Cloudflare Workers",
+  "source": "PRD.md",
+  "assumptions": [
+    "The repository currently has no application source files or package manifest.",
+    "Implementation will target Cloudflare Workers with webhook-only Telegram integration.",
+    "No database, admin UI, or multi-bot support is in scope."
+  ],
+  "roots": [
+    "task-01-foundation",
+    "task-02-webhook-handler",
+    "task-03-response-and-health",
+    "task-04-deploy-config",
+    "task-05-verification"
+  ],
+  "tasks": [
+    {
+      "id": "task-01-foundation",
+      "title": "Project foundation and runtime scaffold",
+      "description": "Create the Bun/Workers project skeleton, manifest, and baseline source layout.",
+      "touchedFiles": [
+        "package.json",
+        "src/index.ts",
+        "wrangler.jsonc"
+      ],
+      "dependsOn": [],
+      "parallelGroup": 1
+    },
+    {
+      "id": "task-02-webhook-handler",
+      "title": "Telegram webhook intake",
+      "description": "Implement POST /webhook, validate the secret header, and parse Telegram updates safely.",
+      "touchedFiles": [
+        "src/index.ts"
+      ],
+      "dependsOn": [
+        "task-01-foundation"
+      ],
+      "parallelGroup": 2
+    },
+    {
+      "id": "task-03-response-and-health",
+      "title": "Bot response and health endpoint",
+      "description": "Return a valid Telegram response payload and expose GET /health for service checks.",
+      "touchedFiles": [
+        "src/index.ts"
+      ],
+      "dependsOn": [
+        "task-02-webhook-handler"
+      ],
+      "parallelGroup": 2
+    },
+    {
+      "id": "task-04-deploy-config",
+      "title": "Cloudflare deployment configuration",
+      "description": "Add the deployment settings and environment variable definitions needed for Workers and Telegram integration.",
+      "touchedFiles": [
+        "wrangler.jsonc",
+        ".dev.vars.example",
+        "README.md"
+      ],
+      "dependsOn": [
+        "task-01-foundation"
+      ],
+      "parallelGroup": 3
+    },
+    {
+      "id": "task-05-verification",
+      "title": "Verification and quality pass",
+      "description": "Add tests where practical and run build, lint, and deployment checks against the implemented worker.",
+      "touchedFiles": [
+        "tests/*.test.ts",
+        "package.json",
+        "README.md"
+      ],
+      "dependsOn": [
+        "task-03-response-and-health",
+        "task-04-deploy-config"
+      ],
+      "parallelGroup": 4
+    },
+    {
+      "id": "task-06-review",
+      "title": "Implementation review",
+      "description": "Review the finished work for correctness, webhook behavior, and alignment with the PRD.",
+      "touchedFiles": [
+        "src/index.ts",
+        "wrangler.jsonc",
+        "tests/*.test.ts"
+      ],
+      "dependsOn": [
+        "task-05-verification"
+      ],
+      "parallelGroup": 5
+    }
+  ],
+  "verification": {
+    "expectedChecks": [
+      "unit or integration tests for webhook handling",
+      "project build or typecheck",
+      "Workers deployment configuration validation"
+    ]
+  },
+  "delivery": {
+    "recommendedNextCommand": "/execute-parallel my-pdt",
+    "note": "Run the roadmap in dependency order; the first implementation batch can be parallelized after the foundation task."
+  }
+}

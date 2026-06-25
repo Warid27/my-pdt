@@ -1,0 +1,7 @@
+.qwen/
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+*.log
