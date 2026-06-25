@@ -60,9 +60,10 @@ Required GitHub repository secrets:
 - `CLOUDFLARE_API_TOKEN` - Cloudflare API token with Cloudflare Pages edit/deploy access
 - `CLOUDFLARE_ACCOUNT_ID` - Cloudflare account ID
 
-Required Cloudflare Pages settings:
+The workflow creates the `my-pdt` Pages project if it does not already exist, then deploys `public` with Pages Functions from `functions/`.
 
-- Project name: `my-pdt`
+Required Cloudflare Pages settings after the first deploy:
+
 - Production environment variable: `TELEGRAM_WEBHOOK_SECRET`
 - Custom domain: `my-pdt.warid.web.id`
 
