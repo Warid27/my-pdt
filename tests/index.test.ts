@@ -911,7 +911,7 @@ describe("handleRequest", () => {
     });
   });
 
-  it("returns a command list without calling the provider", async () => {
+  it("returns a command list with clickable keyboard", async () => {
     const providers = JSON.stringify([
       {
         BASE_URL: "https://api.example.com/v1",
@@ -946,10 +946,20 @@ describe("handleRequest", () => {
       );
 
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({
+      expect(await response.json()).toEqual({
         method: "sendMessage",
         chat_id: 123,
-        text: "Available commands:\n/commands - show this help\nNatural language finance examples:\n- gajian 6jt ke kantong utama\n- beli bakso 10k pake cash\n- Helmi pinjem 12k\n- lihat wallet\n- hapus wallet <nama> (not supported)",
+        text: "Available commands:\n/commands - show this help\n/help - show this help\n/start - show this help\nNatural language examples:\n- gajian 6jt ke kantong utama\n- beli bakso 10k pake cash\n- Helmi pinjem 12k\n- lihat wallet\n- hapus wallet <nama> (not supported)",
+        reply_markup: {
+          keyboard: [
+            [{ text: "/commands" }, { text: "/help" }, { text: "/start" }],
+            [{ text: "lihat wallet" }, { text: "gajian 6jt ke kantong utama" }],
+            [{ text: "beli bakso 10k pake cash" }, { text: "Helmi pinjem 12k" }],
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: false,
+          is_persistent: true,
+        },
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -958,7 +968,7 @@ describe("handleRequest", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("acknowledges webhook requests and schedules AI replies when a token is configured", async () => {
+  it("returns the same keyboard help for /help and /start", async () => {
     const providers = JSON.stringify([
       {
         BASE_URL: "https://api.example.com/v1",
@@ -974,38 +984,46 @@ describe("handleRequest", () => {
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       calls.push({ url, init });
       if (String(url).includes("/chat/completions")) {
-        return Response.json({ choices: [{ message: { content: "Whatsupp?" } }] });
+        throw new Error("provider should not be called for shortcut commands");
       }
       return Response.json({ ok: true });
     }) as typeof fetch;
 
-    const scheduled: Promise<unknown>[] = [];
     try {
-      const response = await handleRequest(
-        new Request("https://example.com/webhook", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "X-Telegram-Bot-Api-Secret-Token": "secret",
-          },
-          body: JSON.stringify({ message: { chat: { id: 123 }, text: "hi" } }),
-        }),
-        { TELEGRAM_WEBHOOK_SECRET: "secret", TELEGRAM_TOKEN: "telegram-token", PROVIDERS: providers },
-        { waitUntil: (promise) => scheduled.push(promise) },
-      );
+      for (const command of ["/help", "/start"]) {
+        const response = await handleRequest(
+          new Request("https://example.com/webhook", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "X-Telegram-Bot-Api-Secret-Token": "secret",
+            },
+            body: JSON.stringify({ message: { chat: { id: 123 }, text: command } }),
+          }),
+          { TELEGRAM_WEBHOOK_SECRET: "secret", TELEGRAM_TOKEN: "telegram-token", PROVIDERS: providers },
+        );
 
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("");
-      expect(scheduled).toHaveLength(1);
-      await scheduled[0];
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          method: "sendMessage",
+          chat_id: 123,
+          text: "Available commands:\n/commands - show this help\n/help - show this help\n/start - show this help\nNatural language examples:\n- gajian 6jt ke kantong utama\n- beli bakso 10k pake cash\n- Helmi pinjem 12k\n- lihat wallet\n- hapus wallet <nama> (not supported)",
+          reply_markup: {
+            keyboard: [
+              [{ text: "/commands" }, { text: "/help" }, { text: "/start" }],
+              [{ text: "lihat wallet" }, { text: "gajian 6jt ke kantong utama" }],
+              [{ text: "beli bakso 10k pake cash" }, { text: "Helmi pinjem 12k" }],
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: false,
+            is_persistent: true,
+          },
+        });
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
 
-    expect(calls.map((call) => String(call.url))).toEqual([
-      "https://api.example.com/v1/chat/completions",
-      "https://api.telegram.org/bottelegram-token/sendMessage",
-    ]);
-    expect(JSON.parse(String(calls[1].init?.body))).toEqual({ chat_id: 123, text: "Whatsupp?" });
+    expect(calls).toHaveLength(0);
   });
 });

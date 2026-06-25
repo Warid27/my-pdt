@@ -128,12 +128,13 @@ function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   return true;
 }
 
-function createTelegramResponse(chatId: number | string, text: string): Response {
+function createTelegramResponse(chatId: number | string, text: string, replyMarkup?: Record<string, unknown>): Response {
   return new Response(
     JSON.stringify({
       method: "sendMessage",
       chat_id: chatId,
       text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     }),
     {
       status: 200,
@@ -154,13 +155,25 @@ function createCommandsResponse(chatId: number | string): Response {
     [
       "Available commands:",
       "/commands - show this help",
-      "Natural language finance examples:",
+      "/help - show this help",
+      "/start - show this help",
+      "Natural language examples:",
       "- gajian 6jt ke kantong utama",
       "- beli bakso 10k pake cash",
       "- Helmi pinjem 12k",
       "- lihat wallet",
       "- hapus wallet <nama> (not supported)",
     ].join("\n"),
+    {
+      keyboard: [
+        [{ text: "/commands" }, { text: "/help" }, { text: "/start" }],
+        [{ text: "lihat wallet" }, { text: "gajian 6jt ke kantong utama" }],
+        [{ text: "beli bakso 10k pake cash" }, { text: "Helmi pinjem 12k" }],
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false,
+      is_persistent: true,
+    },
   );
 }
 
@@ -268,7 +281,7 @@ async function handleWebhook(request: Request, env: Env, ctx?: ExecutionContextL
 
   recordLog(env, "webhook_received", `chat:${chatId}`, ctx);
 
-  if (text.trim() === "/commands") {
+  if (["/commands", "/help", "/start"].includes(text.trim())) {
     recordLog(env, "commands_listed", `chat:${chatId}`, ctx);
     return createCommandsResponse(chatId);
   }
