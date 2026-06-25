@@ -1,4 +1,7 @@
 .qwen/
+specs/
+QWEN.md
+PRD.md
 node_modules/
 .wrangler/
 .dev.vars
