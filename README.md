@@ -13,6 +13,7 @@ Lightweight Telegram bot service on Bun and Cloudflare Pages Functions.
 
 - `POST /webhook`
 - `GET /health`
+- `GET /logs?token=<TELEGRAM_WEBHOOK_SECRET>`
 
 ## Environment Variables
 
@@ -116,3 +117,5 @@ https://api.telegram.org/bot<TELEGRAM_TOKEN>/getWebhookInfo
 ## Notes
 
 The Pages Function validates `X-Telegram-Bot-Api-Secret-Token`, quickly acknowledges valid webhook requests, and sends AI replies through Telegram Bot API `sendMessage`. If `TELEGRAM_TOKEN` is not configured, it falls back to the original inline echo response.
+
+`/logs` exposes recent in-memory diagnostic events for this runtime instance only. It is protected by the webhook secret token and should be used only for quick production checks.

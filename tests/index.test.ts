@@ -1,7 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { createTelegramResponse, handleRequest, isTelegramUpdate } from "../src/index";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { clearLogs, createTelegramResponse, handleRequest, isTelegramUpdate } from "../src/index";
 import { callAnthropicCompatible, callOpenAiCompatible, parseProviders, selectProvider } from "../src/providers";
 import { sendTelegramMessage } from "../src/telegram";
+
+beforeEach(() => {
+  clearLogs();
+});
 
 describe("isTelegramUpdate", () => {
   it("accepts an update with message", () => {
@@ -148,6 +152,37 @@ describe("handleRequest", () => {
       chat_id: 123,
       text: "hi",
     });
+  });
+
+  it("protects logs with the webhook secret token", async () => {
+    const denied = await handleRequest(new Request("https://example.com/logs?token=wrong"), env);
+    expect(denied.status).toBe(401);
+
+    await handleRequest(new Request("https://example.com/health"), env);
+    const response = await handleRequest(new Request("https://example.com/logs?token=secret"), env);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ logs: [] });
+  });
+
+  it("records webhook activity in logs", async () => {
+    await handleRequest(
+      new Request("https://example.com/webhook", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Telegram-Bot-Api-Secret-Token": "secret",
+        },
+        body: JSON.stringify({ message: { chat: { id: 123 }, text: "hi" } }),
+      }),
+      env,
+    );
+
+    const response = await handleRequest(new Request("https://example.com/logs?token=secret"), env);
+    const body = (await response.json()) as { logs: Array<{ event: string; detail?: string }> };
+
+    expect(body.logs.map((log) => log.event)).toEqual(["webhook_received", "webhook_inline_echo"]);
+    expect(body.logs[0].detail).toBe("chat:123");
   });
 
   it("acknowledges webhook requests and schedules AI replies when a token is configured", async () => {
