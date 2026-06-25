@@ -148,6 +148,22 @@ function isWalletDeletionRequest(text: string): boolean {
   return /\b(hapus|delete|remove)\b.*\bwallet\b|\bwallet\b.*\b(hapus|delete|remove)\b/i.test(text);
 }
 
+function createCommandsResponse(chatId: number | string): Response {
+  return createTelegramResponse(
+    chatId,
+    [
+      "Available commands:",
+      "/commands - show this help",
+      "Natural language finance examples:",
+      "- gajian 6jt ke kantong utama",
+      "- beli bakso 10k pake cash",
+      "- Helmi pinjem 12k",
+      "- lihat wallet",
+      "- hapus wallet <nama> (not supported)",
+    ].join("\n"),
+  );
+}
+
 async function sendAiReply(chatId: number | string, text: string, env: Env): Promise<void> {
   if (!env.TELEGRAM_TOKEN) {
     recordLog(env, "ai_skipped", "TELEGRAM_TOKEN is not configured");
@@ -251,6 +267,11 @@ async function handleWebhook(request: Request, env: Env, ctx?: ExecutionContextL
   }
 
   recordLog(env, "webhook_received", `chat:${chatId}`, ctx);
+
+  if (text.trim() === "/commands") {
+    recordLog(env, "commands_listed", `chat:${chatId}`, ctx);
+    return createCommandsResponse(chatId);
+  }
 
   if (!env.TELEGRAM_TOKEN) {
     recordLog(env, "webhook_inline_echo", undefined, ctx);
@@ -377,6 +398,7 @@ export default {
 export {
   addLog,
   clearLogs,
+  createCommandsResponse,
   createTelegramResponse,
   handleFinanceRequest,
   handleHealth,

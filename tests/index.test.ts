@@ -911,6 +911,53 @@ describe("handleRequest", () => {
     });
   });
 
+  it("returns a command list without calling the provider", async () => {
+    const providers = JSON.stringify([
+      {
+        BASE_URL: "https://api.example.com/v1",
+        NAME: "example-openai",
+        TYPE: "OPENAI",
+        API_KEY: "provider-key",
+        MODEL_ID: "model-id",
+        MODEL_NAME: "Model Label",
+      },
+    ]);
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (String(url).includes("/chat/completions")) {
+        throw new Error("provider should not be called for /commands");
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    try {
+      const response = await handleRequest(
+        new Request("https://example.com/webhook", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "X-Telegram-Bot-Api-Secret-Token": "secret",
+          },
+          body: JSON.stringify({ message: { chat: { id: 123 }, text: "/commands" } }),
+        }),
+        { TELEGRAM_WEBHOOK_SECRET: "secret", TELEGRAM_TOKEN: "telegram-token", PROVIDERS: providers },
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        method: "sendMessage",
+        chat_id: 123,
+        text: "Available commands:\n/commands - show this help\nNatural language finance examples:\n- gajian 6jt ke kantong utama\n- beli bakso 10k pake cash\n- Helmi pinjem 12k\n- lihat wallet\n- hapus wallet <nama> (not supported)",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(calls).toHaveLength(0);
+  });
+
   it("acknowledges webhook requests and schedules AI replies when a token is configured", async () => {
     const providers = JSON.stringify([
       {
