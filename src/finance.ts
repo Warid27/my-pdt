@@ -477,16 +477,46 @@ async function markReminderSent(env: FinanceEnv, id: number): Promise<void> {
   await db.prepare("UPDATE debt_reminders SET reminded_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
 }
 
+function formatIdr(amount: number): string {
+  return amount.toLocaleString("id-ID");
+}
+
+function formatWallets(wallets: WalletBalance[]): string {
+  if (wallets.length === 0) {
+    return "No wallets found yet.";
+  }
+
+  return ["Wallets:", ...wallets.map((wallet) => `- ${wallet.wallet}: ${formatIdr(wallet.balance)}`)].join("\n");
+}
+
+function formatDebts(debts: DebtBalance[]): string {
+  if (debts.length === 0) {
+    return "No active debts found.";
+  }
+
+  return [
+    "Debts:",
+    ...debts.map((debt) => {
+      const label = debt.direction === "lend" ? "owes you" : "you owe";
+      return `- ${debt.person}: ${label} ${formatIdr(debt.balance)}`;
+    }),
+  ].join("\n");
+}
+
 async function executeFinanceToolCall(env: FinanceEnv, name: string, args: Record<string, unknown>): Promise<FinanceToolResult> {
   switch (name) {
     case "record_transaction":
       return recordTransaction(env, args as RecordTransactionInput);
     case "create_new_wallet":
       return createNewWallet(env, args as CreateWalletInput);
-    case "get_wallets":
-      return { text: "Wallets fetched.", data: await listWallets(env) };
-    case "get_debts_summary":
-      return { text: "Debts fetched.", data: await getDebtsSummary(env) };
+    case "get_wallets": {
+      const wallets = await listWallets(env);
+      return { text: formatWallets(wallets), data: wallets };
+    }
+    case "get_debts_summary": {
+      const debts = await getDebtsSummary(env);
+      return { text: formatDebts(debts), data: debts };
+    }
     case "add_reminder":
       return addReminder(env, args as AddReminderInput);
     case "settle_reminder_by_context":

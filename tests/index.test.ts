@@ -12,6 +12,7 @@ import {
 import {
   addReminder,
   createNewWallet,
+  executeFinanceToolCall,
   getFinanceBalances,
   recordTransaction,
   type FinanceIntentType,
@@ -419,6 +420,35 @@ describe("finance ledger", () => {
     expect(db.ledger).toHaveLength(0);
   });
 
+  it("formats wallet lookup tool results for Telegram replies", async () => {
+    const db = createMockD1();
+    const env = { DB: db as unknown as D1Database };
+    await createNewWallet(env, { wallet_name: "cash_on_hand", initial_balance: 0 });
+    await createNewWallet(env, { wallet_name: "kantong_utama", initial_balance: 6000000 });
+
+    const result = await executeFinanceToolCall(env, "get_wallets", {});
+
+    expect(result.text).toBe("Wallets:\n- cash_on_hand: 0\n- kantong_utama: 6.000.000");
+  });
+
+  it("formats debt summary tool results for Telegram replies", async () => {
+    const db = createMockD1();
+    const env = { DB: db as unknown as D1Database };
+    await createNewWallet(env, { wallet_name: "cash", initial_balance: 50000 });
+    await recordTransaction(env, {
+      intent_type: "debt_lend",
+      amount: 12000,
+      description: "naspad",
+      wallet_name: "cash",
+      person: "Helmi",
+      category: "food",
+    });
+
+    const result = await executeFinanceToolCall(env, "get_debts_summary", {});
+
+    expect(result.text).toBe("Debts:\n- helmi: owes you 12.000");
+  });
+
   it("computes balances from ledger rows", async () => {
     const db = createMockD1();
     const env = { DB: db as unknown as D1Database };
@@ -693,6 +723,72 @@ describe("handleRequest", () => {
     const toolCall = logs.find((log) => log.event === "finance_tool_call");
     expect(aiResponse?.detail).toContain('"prompt_tokens":20');
     expect(toolCall?.detail).toContain('"wallet_name":"cash"');
+  });
+
+  it("executes wallet lookup tool calls from provider responses", async () => {
+    const db = createMockD1();
+    const providers = JSON.stringify([
+      {
+        BASE_URL: "https://api.example.com/v1",
+        NAME: "example-openai",
+        TYPE: "OPENAI",
+        API_KEY: "provider-key",
+        MODEL_ID: "model-id",
+        MODEL_NAME: "Model Label",
+      },
+    ]);
+    const env: Env = {
+      TELEGRAM_WEBHOOK_SECRET: "secret",
+      TELEGRAM_TOKEN: "telegram-token",
+      PROVIDERS: providers,
+      DB: db as unknown as D1Database,
+    };
+    await createNewWallet(env, { wallet_name: "cash_on_hand", initial_balance: 0 });
+    await createNewWallet(env, { wallet_name: "kantong_utama", initial_balance: 6000000 });
+
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (String(url).includes("/chat/completions")) {
+        return Response.json({
+          choices: [
+            {
+              message: {
+                tool_calls: [{ function: { name: "get_wallets", arguments: "null" } }],
+              },
+            },
+          ],
+        });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    const scheduled: Promise<unknown>[] = [];
+    try {
+      const response = await handleRequest(
+        new Request("https://example.com/webhook", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "X-Telegram-Bot-Api-Secret-Token": "secret",
+          },
+          body: JSON.stringify({ message: { chat: { id: 123 }, text: "Ada wallet apa saja" } }),
+        }),
+        env,
+        { waitUntil: (promise) => scheduled.push(promise) },
+      );
+
+      expect(response.status).toBe(200);
+      await Promise.all(scheduled);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(JSON.parse(String(calls.at(-1)?.init?.body))).toEqual({
+      chat_id: 123,
+      text: "Wallets:\n- cash_on_hand: 0\n- kantong_utama: 6.000.000",
+    });
   });
 
   it("schedules due reminder notifications", async () => {
