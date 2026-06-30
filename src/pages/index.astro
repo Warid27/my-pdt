@@ -1,0 +1,124 @@
+---
+import DashboardLayout from "../layouts/DashboardLayout.astro";
+import { apiFetch, formatRupiah, type FinanceSummary, type ApiAccount } from "../lib/api";
+
+let summary: FinanceSummary | null = null;
+let account: ApiAccount | null = null;
+let loadError = false;
+
+try {
+  account = await apiFetch<ApiAccount>("/api/me");
+  summary = await apiFetch<FinanceSummary>("/api/finance/summary");
+} catch {
+  loadError = true;
+}
+
+const totalWallets = summary?.wallets.reduce((sum, w) => sum + w.balance, 0) ?? 0;
+const totalDebts = summary?.debts.reduce((sum, d) => sum + d.balance, 0) ?? 0;
+const expenses = summary?.categories.filter((c) => c.type === "expense") ?? [];
+const incomes = summary?.categories.filter((c) => c.type === "income") ?? [];
+const totalExpenses = expenses.reduce((sum, c) => sum + c.balance, 0);
+const totalIncomes = incomes.reduce((sum, c) => sum + c.balance, 0);
+---
+<DashboardLayout>
+  <h1 style="font-size: 1.5rem; margin-bottom: 1.5rem;">Dashboard</h1>
+  {loadError && <div class="card empty-state">Gagal memuat data. Coba refresh halaman.</div>}
+  {account && summary && (
+    <>
+      <div class="grid grid-3" style="margin-bottom: 1.5rem;">
+        <div class="card">
+          <h3>Total Saldo</h3>
+          <div class="value positive">{formatRupiah(totalWallets)}</div>
+        </div>
+        <div class="card">
+          <h3>Total Hutang/Piutang</h3>
+          <div class="value warning">{formatRupiah(totalDebts)}</div>
+        </div>
+        <div class="card">
+          <h3>Pengeluaran Bulan Ini</h3>
+          <div class="value negative">{formatRupiah(totalExpenses)}</div>
+        </div>
+      </div>
+      <div class="grid grid-2">
+        <div class="card">
+          <h3>Wallets</h3>
+          <table>
+            <tbody>
+              {summary.wallets.map((w) => (
+                <tr>
+                  <td style="text-transform: capitalize;">{w.wallet}</td>
+                  <td style="text-align: right; font-weight: 600;">{formatRupiah(w.balance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Hutang & Piutang</h3>
+          {summary.debts.length === 0 ? (
+            <div style="color: var(--text-muted); padding: 1rem 0;">Tidak ada hutang/piutang</div>
+          ) : (
+            <table>
+              <tbody>
+                {summary.debts.map((d) => (
+                  <tr>
+                    <td style="text-transform: capitalize;">{d.person}</td>
+                    <td>
+                      <span class={`badge ${d.direction === "lend" ? "badge-green" : "badge-red"}`}>
+                        {d.direction === "lend" ? "Piutang" : "Hutang"}
+                      </span>
+                    </td>
+                    <td style="text-align: right; font-weight: 600;">{formatRupiah(d.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      <div class="grid grid-2" style="margin-top: 1rem;">
+        <div class="card">
+          <h3>Pengeluaran per Kategori</h3>
+          {expenses.length === 0 ? (
+            <div style="color: var(--text-muted); padding: 1rem 0;">Belum ada pengeluaran</div>
+          ) : (
+            <table>
+              <tbody>
+                {expenses.map((c) => (
+                  <tr>
+                    <td style="text-transform: capitalize;">{c.category}</td>
+                    <td style="text-align: right;">{formatRupiah(c.balance)}</td>
+                    {c.budget && (
+                      <td style="text-align: right;">
+                        <span class={`badge ${c.status === "over" ? "badge-red" : c.status === "warning" ? "badge-yellow" : "badge-green"}`}>
+                          {c.usagePercent}%
+                        </span>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div class="card">
+          <h3>Pemasukan per Kategori</h3>
+          {incomes.length === 0 ? (
+            <div style="color: var(--text-muted); padding: 1rem 0;">Belum ada pemasukan</div>
+          ) : (
+            <table>
+              <tbody>
+                {incomes.map((c) => (
+                  <tr>
+                    <td style="text-transform: capitalize;">{c.category}</td>
+                    <td style="text-align: right; font-weight: 600;" class="positive">{formatRupiah(c.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </>
+  )}
+</DashboardLayout>

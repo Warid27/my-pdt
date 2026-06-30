@@ -1,0 +1,134 @@
+---
+import DashboardLayout from "../layouts/DashboardLayout.astro";
+import { apiFetch, type HabitWithStatus } from "../lib/api";
+
+let habits: HabitWithStatus[] = [];
+let loadError = false;
+
+try {
+  const result = await apiFetch<{ items: HabitWithStatus[] }>("/api/habits");
+  habits = result.items;
+} catch {
+  loadError = true;
+}
+---
+<DashboardLayout>
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1 style="font-size: 1.5rem;">Habits</h1>
+    <button class="btn btn-primary" id="newHabitBtn">+ Habit Baru</button>
+  </div>
+  {loadError && <div class="card empty-state">Gagal memuat data.</div>}
+  {habits.length === 0 && !loadError && (
+    <div class="card empty-state">
+      Belum ada habit. Buat habit pertama Anda!
+    </div>
+  )}
+  {habits.length > 0 && (
+    <div class="grid grid-2">
+      {habits.map((habit) => (
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
+            <div>
+              <h3 style="font-size: 1rem; color: var(--text); text-transform: none; letter-spacing: normal; margin-bottom: 0.25rem;">
+                {habit.name}
+              </h3>
+              {habit.description && <p style="font-size: 0.8125rem; color: var(--text-muted);">{habit.description}</p>}
+            </div>
+            <span class={`badge ${habit.checkedToday ? "badge-green" : "badge-red"}`}>
+              {habit.checkedToday ? "✅ Selesai" : "❌ Belum"}
+            </span>
+          </div>
+          <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+            <div>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Streak</div>
+              <div style="font-size: 1.25rem; font-weight: 700;">🔥 {habit.currentStreak}</div>
+            </div>
+            <div>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Terbaik</div>
+              <div style="font-size: 1.25rem; font-weight: 700;">🏆 {habit.bestStreak}</div>
+            </div>
+            <div>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Bulan ini</div>
+              <div style="font-size: 1.25rem; font-weight: 700;">📊 {Math.round(habit.completionThisMonth * 100)}%</div>
+            </div>
+          </div>
+          {!habit.checkedToday && (
+            <button class="btn btn-primary" style="width: 100%;" data-checkin-id={habit.id}>
+              ✓ Check In
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  )}
+  <div id="habitModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center;">
+    <div class="card" style="width:90%; max-width:400px;">
+      <h3 style="margin-bottom:1rem;">Habit Baru</h3>
+      <form id="habitForm">
+        <div class="form-group" style="margin-bottom:1rem;">
+          <label style="font-size:0.875rem; color:var(--text-muted); display:block; margin-bottom:0.375rem;">Nama</label>
+          <input type="text" name="name" class="input" style="width:100%;" required placeholder="olahraga" />
+        </div>
+        <div class="form-group" style="margin-bottom:1rem;">
+          <label style="font-size:0.875rem; color:var(--text-muted); display:block; margin-bottom:0.375rem;">Deskripsi (opsional)</label>
+          <input type="text" name="description" class="input" style="width:100%;" placeholder="Olahraga pagi 30 menit" />
+        </div>
+        <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+          <button type="button" class="btn" id="cancelHabit">Batal</button>
+          <button type="submit" class="btn btn-primary">Buat</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <script>
+    const modal = document.getElementById("habitModal");
+    document.getElementById("newHabitBtn")?.addEventListener("click", () => {
+      modal.style.display = "flex";
+    });
+    document.getElementById("cancelHabit")?.addEventListener("click", () => {
+      modal.style.display = "none";
+    });
+    document.getElementById("habitForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      try {
+        const res = await fetch("/api/habits", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            name: formData.get("name"),
+            description: formData.get("description") || undefined,
+          }),
+        });
+        if (res.ok) {
+          window.location.reload();
+        } else {
+          const body = await res.json().catch(() => ({ error: { message: "Gagal membuat habit" } }));
+          alert(body?.error?.message ?? "Gagal membuat habit");
+        }
+      } catch {
+        alert("Koneksi gagal");
+      }
+    });
+    document.querySelectorAll("[data-checkin-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-checkin-id");
+        try {
+          const res = await fetch(`/api/habits/${id}/checkin`, {
+            method: "POST",
+            credentials: "include",
+          });
+          if (res.ok) {
+            window.location.reload();
+          } else {
+            const body = await res.json().catch(() => ({ error: { message: "Gagal check in" } }));
+            alert(body?.error?.message ?? "Gagal check in");
+          }
+        } catch {
+          alert("Koneksi gagal");
+        }
+      });
+    });
+  </script>
+</DashboardLayout>

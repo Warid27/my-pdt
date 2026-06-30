@@ -1,0 +1,96 @@
+---
+import DashboardLayout from "../layouts/DashboardLayout.astro";
+import { apiFetch, formatRupiah, formatDate, type PaginatedResponse, type LedgerEntry } from "../lib/api";
+
+let result: PaginatedResponse<LedgerEntry> | null = null;
+let loadError = false;
+
+try {
+  result = await apiFetch<PaginatedResponse<LedgerEntry>>("/api/finance/list?page=1&pageSize=50");
+} catch {
+  loadError = true;
+}
+
+const entries = result?.items ?? [];
+---
+<DashboardLayout>
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1 style="font-size: 1.5rem;">Transaksi</h1>
+    <a href="/api/finance/export.csv" class="btn">📥 Export CSV</a>
+  </div>
+  {loadError && <div class="card empty-state">Gagal memuat data.</div>}
+  {entries.length === 0 && !loadError && (
+    <div class="card empty-state">Belum ada transaksi.</div>
+  )}
+  {entries.length > 0 && (
+    <div class="card" style="padding: 0; overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Tanggal</th>
+            <th>Deskripsi</th>
+            <th>Tipe</th>
+            <th>Jumlah</th>
+            <th>Wallet</th>
+            <th>Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((entry) => {
+            const isExpense = entry.debit_account.startsWith("expenses:");
+            const isIncome = entry.credit_account.startsWith("income:");
+            const isDebt = entry.debit_account.startsWith("assets:receivables:") || entry.debit_account.startsWith("liabilities:payables:") || entry.credit_account.startsWith("assets:receivables:") || entry.credit_account.startsWith("liabilities:payables:");
+            const type = isExpense ? "expense" : isIncome ? "income" : isDebt ? "debt" : "transfer";
+            const wallet = isExpense
+              ? entry.credit_account.replace("assets:wallets:", "")
+              : isIncome
+              ? entry.debit_account.replace("assets:wallets:", "")
+              : entry.debit_account.startsWith("assets:wallets:")
+              ? entry.debit_account.replace("assets:wallets:", "")
+              : entry.credit_account.replace("assets:wallets:", "");
+            return (
+              <tr>
+                <td style="white-space: nowrap;">{formatDate(entry.created_at)}</td>
+                <td>{entry.description ?? "—"}</td>
+                <td>
+                  <span class={`badge ${isExpense ? "badge-red" : isIncome ? "badge-green" : "badge-yellow"}`}>
+                    {type}
+                  </span>
+                </td>
+                <td style="text-align: right; font-weight: 600;" class={isExpense ? "negative" : isIncome ? "positive" : ""}>
+                  {formatRupiah(entry.amount)}
+                </td>
+                <td style="text-transform: capitalize;">{wallet}</td>
+                <td>
+                  <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" data-delete-id={entry.id}>Hapus</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+  <script>
+    document.querySelectorAll("[data-delete-id]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-delete-id");
+        if (!confirm("Hapus transaksi ini? Tindakan ini membuat reversal entry.")) return;
+        try {
+          const res = await fetch(`/api/finance/${id}`, {
+            method: "DELETE",
+            credentials: "include",
+          });
+          if (res.ok) {
+            window.location.reload();
+          } else {
+            const body = await res.json().catch(() => ({ error: { message: "Gagal menghapus" } }));
+            alert(body?.error?.message ?? "Gagal menghapus");
+          }
+        } catch {
+          alert("Koneksi gagal");
+        }
+      });
+    });
+  </script>
+</DashboardLayout>

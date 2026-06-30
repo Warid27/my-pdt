@@ -1,0 +1,145 @@
+---
+import DashboardLayout from "../layouts/DashboardLayout.astro";
+import { apiFetch, formatRupiah, type Budget, type FinanceSummary } from "../lib/api";
+
+let budgets: Budget[] = [];
+let summary: FinanceSummary | null = null;
+let loadError = false;
+
+try {
+  const budgetsResult = await apiFetch<{ budgets: Budget[] }>("/api/budgets");
+  budgets = budgetsResult.budgets;
+  summary = await apiFetch<FinanceSummary>("/api/finance/summary");
+} catch {
+  loadError = true;
+}
+
+const expenses = summary?.categories.filter((c) => c.type === "expense") ?? [];
+const budgetMap = new Map(expenses.map((e) => [e.category, e]));
+---
+<DashboardLayout>
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1 style="font-size: 1.5rem;">Budgets</h1>
+    <button class="btn btn-primary" id="newBudgetBtn">+ Budget Baru</button>
+  </div>
+  {loadError && <div class="card empty-state">Gagal memuat data.</div>}
+  {budgets.length === 0 && !loadError && (
+    <div class="card empty-state">Belum ada budget. Buat budget pertama Anda!</div>
+  )}
+  {budgets.length > 0 && (
+    <div class="grid grid-2">
+      {budgets.map((budget) => {
+        const cat = budgetMap.get(budget.category);
+        const spent = cat?.balance ?? 0;
+        const percent = budget.amount > 0 ? Math.round((spent / budget.amount) * 100) : 0;
+        const status = percent > 100 ? "over" : percent > 80 ? "warning" : "ok";
+        const fillColor = status === "over" ? "#ef4444" : status === "warning" ? "#eab308" : "#22c55e";
+        return (
+          <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+              <h3 style="font-size: 1rem; color: var(--text); text-transform: none; letter-spacing: normal;">
+                {budget.category}
+              </h3>
+              <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" data-delete-budget={budget.category}>Hapus</button>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+              <span style="color: var(--text-muted); font-size: 0.875rem;">
+                Terpakai: <span style={{ color: fillColor }}>{formatRupiah(spent)}</span>
+              </span>
+              <span style="color: var(--text-muted); font-size: 0.875rem;">
+                Budget: {formatRupiah(budget.amount)}
+              </span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" style={`width: ${Math.min(percent, 100)}%; background: ${fillColor};`}></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
+              <span style="font-size: 0.8125rem; color: var(--text-muted);">{budget.period}</span>
+              <span class={`badge ${status === "over" ? "badge-red" : status === "warning" ? "badge-yellow" : "badge-green"}`}>
+                {percent}%
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  )}
+  <div id="budgetModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center;">
+    <div class="card" style="width:90%; max-width:400px;">
+      <h3 style="margin-bottom:1rem;">Budget Baru</h3>
+      <form id="budgetForm">
+        <div class="form-group" style="margin-bottom:1rem;">
+          <label style="font-size:0.875rem; color:var(--text-muted); display:block; margin-bottom:0.375rem;">Kategori</label>
+          <input type="text" name="category" class="input" style="width:100%;" required placeholder="makanan" />
+        </div>
+        <div class="form-group" style="margin-bottom:1rem;">
+          <label style="font-size:0.875rem; color:var(--text-muted); display:block; margin-bottom:0.375rem;">Jumlah (Rp)</label>
+          <input type="number" name="amount" class="input" style="width:100%;" required min="1" placeholder="500000" />
+        </div>
+        <div class="form-group" style="margin-bottom:1rem;">
+          <label style="font-size:0.875rem; color:var(--text-muted); display:block; margin-bottom:0.375rem;">Periode</label>
+          <select name="period" class="input" style="width:100%;">
+            <option value="monthly">Monthly</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </div>
+        <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+          <button type="button" class="btn" id="cancelBudget">Batal</button>
+          <button type="submit" class="btn btn-primary">Simpan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <script>
+    const modal = document.getElementById("budgetModal");
+    document.getElementById("newBudgetBtn")?.addEventListener("click", () => {
+      modal.style.display = "flex";
+    });
+    document.getElementById("cancelBudget")?.addEventListener("click", () => {
+      modal.style.display = "none";
+    });
+    document.getElementById("budgetForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      try {
+        const res = await fetch("/api/budgets", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            category: formData.get("category"),
+            amount: Number(formData.get("amount")),
+            period: formData.get("period"),
+          }),
+        });
+        if (res.ok) {
+          window.location.reload();
+        } else {
+          const body = await res.json().catch(() => ({ error: { message: "Gagal menyimpan budget" } }));
+          alert(body?.error?.message ?? "Gagal menyimpan budget");
+        }
+      } catch {
+        alert("Koneksi gagal");
+      }
+    });
+    document.querySelectorAll("[data-delete-budget]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const category = btn.getAttribute("data-delete-budget");
+        if (!confirm(`Hapus budget "${category}"?`)) return;
+        try {
+          const res = await fetch(`/api/budgets/${encodeURIComponent(category)}`, {
+            method: "DELETE",
+            credentials: "include",
+          });
+          if (res.ok) {
+            window.location.reload();
+          } else {
+            alert("Gagal menghapus budget");
+          }
+        } catch {
+          alert("Koneksi gagal");
+        }
+      });
+    });
+  </script>
+</DashboardLayout>
