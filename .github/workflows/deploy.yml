@@ -1,9 +1,9 @@
-name: Deploy to Cloudflare Pages
+name: Deploy Backend to Cloudflare Pages
 
 on:
   push:
     branches:
-      - main
+      - backend
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
         run: bun test
 
       - name: Deploy to Cloudflare Pages
-        run: bunx wrangler pages deploy public --project-name=my-pdt --branch=main --commit-dirty=true
+        run: bunx wrangler pages deploy public --project-name=my-pdt --branch=backend --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
