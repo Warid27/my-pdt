@@ -6,6 +6,8 @@ import {
   getReminders,
   markReminderSent,
 } from "./finance";
+import { executeHabitToolCall, getUncheckedHabitsToday, getCheckedHabitsToday } from "./habits";
+import { habitTools, isHabitToolName } from "./habit-tools";
 import { handleApiRequest, type AuthEnv } from "./api";
 import { handleOpenApiRequest } from "./openapi";
 import { callProvider, parseProviders, ProviderError, selectProvider } from "./providers";
@@ -131,21 +133,27 @@ function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   return true;
 }
 
-function createTelegramResponse(chatId: number | string, text: string, replyMarkup?: Record<string, unknown>): Response {
-  return new Response(
-    JSON.stringify({
-      method: "sendMessage",
-      chat_id: chatId,
-      text,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    }),
-    {
-      status: 200,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-      },
+function createTelegramResponse(
+  chatId: number | string,
+  text: string,
+  options?: {
+    parseMode?: "HTML" | "Markdown";
+    replyMarkup?: Record<string, unknown>;
+  },
+): Response {
+  const body: Record<string, unknown> = { method: "sendMessage", chat_id: chatId, text };
+  if (options?.parseMode) {
+    body.parse_mode = options.parseMode;
+  }
+  if (options?.replyMarkup) {
+    body.reply_markup = options.replyMarkup;
+  }
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
     },
-  );
+  });
 }
 
 function isWalletDeletionRequest(text: string): boolean {
@@ -153,31 +161,34 @@ function isWalletDeletionRequest(text: string): boolean {
 }
 
 function createCommandsResponse(chatId: number | string): Response {
-  return createTelegramResponse(
-    chatId,
-    [
-      "Available commands:",
-      "/commands - show this help",
-      "/help - show this help",
-      "/start - show this help",
-      "Natural language examples:",
-      "- gajian 6jt ke kantong utama",
-      "- beli bakso 10k pake cash",
-      "- Helmi pinjem 12k",
-      "- lihat wallet",
-      "- hapus wallet <nama> (not supported)",
-    ].join("\n"),
-    {
-      keyboard: [
-        [{ text: "/commands" }, { text: "/help" }, { text: "/start" }],
-        [{ text: "lihat wallet" }, { text: "gajian 6jt ke kantong utama" }],
-        [{ text: "beli bakso 10k pake cash" }, { text: "Helmi pinjem 12k" }],
+  const html = [
+    "<b>💰 Finance</b>",
+    "• <i>gajian 6jt ke kantong utama</i> — catat pemasukan",
+    "• <i>beli bakso 10k pake cash</i> — catat pengeluaran",
+    "• <i>lihat wallet</i> — cek saldo semua wallet",
+    "• <i>Helmi pinjem 12k</i> — catat hutang",
+    "",
+    "<b>✅ Habits</b>",
+    "• <i>buat habit olahraga setiap hari</i> — buat habit baru",
+    "• <i>udah olahraga hari ini</i> — check in habit",
+    "• <i>habits hari ini apa aja</i> — lihat status habit",
+    "• <i>streak olahraga berapa</i> — lihat statistik streak",
+    "",
+    "<b>⚙️ Settings</b>",
+    "• <i>/commands</i> — tampilkan bantuan ini",
+    "• <i>/help</i> — tampilkan bantuan ini",
+    "• <i>/start</i> — tampilkan bantuan ini",
+  ].join("\n");
+
+  return createTelegramResponse(chatId, html, {
+    parseMode: "HTML",
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: "💰 Cek saldo", callback_data: "get_wallets" }, { text: "💸 Cek hutang", callback_data: "get_debts" }],
+        [{ text: "✅ Habits hari ini", callback_data: "get_habits_today" }],
       ],
-      resize_keyboard: true,
-      one_time_keyboard: false,
-      is_persistent: true,
     },
-  );
+  });
 }
 
 async function sendAiReply(chatId: number | string, text: string, env: Env): Promise<void> {
@@ -232,14 +243,16 @@ async function sendAiReply(chatId: number | string, text: string, env: Env): Pro
 
       const toolResults = [];
       for (const toolCall of result.toolCalls) {
-        recordLog(env, "finance_tool_call", logDetail({ name: toolCall.name, arguments: toolCall.arguments }));
-        const toolResult = await executeFinanceToolCall(env, toolCall.name, toolCall.arguments);
+        recordLog(env, "tool_call", logDetail({ name: toolCall.name, arguments: toolCall.arguments }));
+        const toolResult = isHabitToolName(toolCall.name)
+          ? await executeHabitToolCall(env, toolCall.name, toolCall.arguments)
+          : await executeFinanceToolCall(env, toolCall.name, toolCall.arguments);
         toolResults.push(toolResult);
-        recordLog(env, "finance_tool_result", logDetail({ name: toolCall.name, result: toolResult }));
+        recordLog(env, "tool_result", logDetail({ name: toolCall.name, result: toolResult }));
       }
 
       replyText = toolResults.length > 0 ? toolResults.map((item) => item.text).join("\n") : result.text;
-      recordLog(env, toolResults.length > 0 ? "finance_tools_executed" : "provider_reply", provider.NAME);
+      recordLog(env, toolResults.length > 0 ? "tools_executed" : "provider_reply", provider.NAME);
     } catch (error) {
       replyText = "Sorry, I couldn't generate a reply right now.";
       recordLog(
@@ -374,6 +387,24 @@ async function sendDueReminders(env: Env): Promise<void> {
   }
 
   recordLog(env, "reminders_sent", String(reminders.length));
+
+  const uncheckedHabits = await getUncheckedHabitsToday(env);
+  if (uncheckedHabits.length > 0) {
+    const checkedHabits = await getCheckedHabitsToday(env);
+    const habitLines = uncheckedHabits.map((h) => `❌ ${h.name}`);
+    if (checkedHabits.length > 0) {
+      habitLines.push(...checkedHabits.map((h) => `✅ ${h.name}`));
+    }
+    const habitText = [
+      "⏰ Reminder habits hari ini:",
+      "",
+      ...habitLines,
+      "",
+      `${uncheckedHabits.length} habit belum selesai. Yuk!`,
+    ].join("\n");
+    await sendTelegramMessage({ chatId, text: habitText, token: env.TELEGRAM_TOKEN });
+    recordLog(env, "habit_reminders_sent", String(uncheckedHabits.length));
+  }
 }
 
 async function handleScheduled(_controller: ScheduledControllerLike, env: Env, ctx: ExecutionContextLike): Promise<void> {

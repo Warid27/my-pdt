@@ -1,5 +1,14 @@
-import { financeTools, isFinanceToolName, type FinanceToolCall, type ToolDefinition } from "./finance-tools";
+import { financeTools, isFinanceToolName, financeToolNames, type FinanceToolCall, type ToolDefinition } from "./finance-tools";
+import { habitTools, isHabitToolName } from "./habit-tools";
 import { financeSystemPrompt } from "./systemPrompt";
+
+const allTools: ToolDefinition[] = [...financeTools, ...habitTools];
+
+const allToolNames: Set<string> = new Set([...financeToolNames, ...new Set(habitTools.map((t) => t.function.name))]);
+
+function isToolName(value: string): boolean {
+  return allToolNames.has(value);
+}
 
 type ProviderType = "OPENAI" | "ANTHROPIC";
 
@@ -141,7 +150,7 @@ function parseOpenAiToolCalls(value: unknown): FinanceToolCall[] {
 
     const call = item as { function?: { name?: string; arguments?: unknown } };
     const name = call.function?.name;
-    if (!name || !isFinanceToolName(name)) {
+    if (!name || !isToolName(name)) {
       return [];
     }
 
@@ -160,7 +169,7 @@ function parseAnthropicToolCalls(value: unknown): FinanceToolCall[] {
     }
 
     const block = item as { type?: string; name?: string; input?: unknown };
-    if (block.type !== "tool_use" || !block.name || !isFinanceToolName(block.name)) {
+    if (block.type !== "tool_use" || !block.name || !isToolName(block.name)) {
       return [];
     }
 
@@ -173,7 +182,7 @@ async function callOpenAiCompatible({
   message,
   fetcher = fetch,
   systemPrompt = financeSystemPrompt,
-  tools = financeTools,
+  tools = allTools,
 }: ChatRequest): Promise<ChatResult> {
   const response = await fetcher(providerUrl(provider, "/chat/completions"), {
     method: "POST",
@@ -228,7 +237,7 @@ async function callAnthropicCompatible({
   message,
   fetcher = fetch,
   systemPrompt = financeSystemPrompt,
-  tools = financeTools,
+  tools = allTools,
 }: ChatRequest): Promise<ChatResult> {
   const response = await fetcher(providerUrl(provider, "/messages"), {
     method: "POST",
@@ -289,13 +298,15 @@ function callProvider(request: ChatRequest): Promise<ChatResult> {
 }
 
 export {
+  allTools,
   callAnthropicCompatible,
   callOpenAiCompatible,
   callProvider,
+  isToolName,
   parseAnthropicToolCalls,
   parseOpenAiToolCalls,
   parseProviders,
   ProviderError,
   selectProvider,
 };
-export type { ChatResult, ProviderConfig, ProviderType };
+export type { ChatResult, ProviderConfig, ProviderType, ToolDefinition };

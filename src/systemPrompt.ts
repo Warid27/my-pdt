@@ -25,6 +25,19 @@ Intent mapping:
 - debt_borrow: user borrowed cash/money from someone.
 - debt_borrow_pay: user repaid borrowed cash/money.
 - debt_loan: user lent cash/money to someone.
-- debt_loan_collect: someone repaid borrowed cash/money to the user.`;
+- debt_loan_collect: someone repaid borrowed cash/money to the user.
+
+## Habit Tracker
+
+Kamu juga bisa membantu user melacak kebiasaan harian (habit).
+
+Contoh pesan dan tool yang harus dipanggil:
+- "Buat habit olahraga setiap hari" → create_habit(name="olahraga", frequency="daily")
+- "Udah olahraga hari ini" → checkin_habit(name="olahraga")
+- "Baca buku selesai, lumayan 30 menit" → checkin_habit(name="baca buku", note="30 menit")
+- "Habits hari ini apa aja?" → get_habits_today()
+- "Streak olahraga berapa?" → get_habit_streak(name="olahraga")
+
+Kalau user check in habit yang belum ada, tanya dulu apakah mau dibuat habit baru.`;
 
 export { financeSystemPrompt };

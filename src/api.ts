@@ -1,4 +1,18 @@
-import { getFinanceBalances } from "./finance";
+import { getFinanceBalances, getFilteredLedger, reverseTransaction, editTransaction, getPersonDebts } from "./finance";
+import type { LedgerFilter } from "./finance";
+import { listBudgets, upsertBudget, deleteBudget } from "./budgets";
+import type { BudgetPeriod } from "./budgets";
+import {
+  createHabit,
+  deleteHabit,
+  getHabitsWithStatus,
+  getHabitById,
+  getCheckinHistory,
+  checkinHabit,
+  updateHabit,
+  wibDate,
+} from "./habits";
+import type { HabitFrequency } from "./habits";
 
 const accessTokenLifetimeMs = 15 * 60 * 1000;
 const refreshTokenLifetimeMs = 30 * 24 * 60 * 60 * 1000;
@@ -702,7 +716,316 @@ async function handleFinanceList(request: Request, env: AuthEnv, context: ApiReq
 
   const url = new URL(request.url);
   const pagination = parsePagination(url, 20);
-  return jsonResponse(await getLedgerPage(env, pagination.page, pagination.pageSize));
+
+  const filter: LedgerFilter = {
+    from: url.searchParams.get("from") ?? undefined,
+    to: url.searchParams.get("to") ?? undefined,
+    wallet: url.searchParams.get("wallet") ?? undefined,
+    category: url.searchParams.get("category") ?? undefined,
+    type: url.searchParams.get("type") ?? undefined,
+    person: url.searchParams.get("person") ?? undefined,
+    includeReversed: url.searchParams.get("includeReversed") === "true",
+  };
+
+  try {
+    const result = await getFilteredLedger(env, filter, pagination.page, pagination.pageSize);
+    return jsonResponse(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid filter";
+    return errorResponse(message, 400, "invalidRequest");
+  }
+}
+
+async function handleFinanceEdit(request: Request, env: AuthEnv, context: ApiRequestContext, id: number): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "PATCH") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const body = await parseJsonBody<{ amount?: number; description?: string; category?: string }>(request).catch(() => ({}));
+
+  try {
+    const result = await editTransaction(env, id, body);
+    return jsonResponse(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Edit failed";
+    if (message.includes("not found")) {
+      return errorResponse(message, 404, "notFound");
+    }
+    if (message.includes("already reversed")) {
+      return errorResponse(message, 409, "conflict");
+    }
+    return errorResponse(message, 400, "invalidRequest");
+  }
+}
+
+async function handleFinanceDelete(request: Request, env: AuthEnv, context: ApiRequestContext, id: number): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "DELETE") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  try {
+    const result = await reverseTransaction(env, id);
+    return jsonResponse(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Delete failed";
+    if (message.includes("not found")) {
+      return errorResponse(message, 404, "notFound");
+    }
+    if (message.includes("already reversed")) {
+      return errorResponse(message, 409, "conflict");
+    }
+    return errorResponse(message, 400, "invalidRequest");
+  }
+}
+
+function escapeCsvField(value: string): string {
+  if (/[",\n\r]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function buildCsv(rows: { id: number; created_at: string; description: string | null; amount: number; debit_account: string; credit_account: string; person: string | null; category: string | null }[]): string {
+  const headers = ["id", "date", "description", "amount", "type", "debit_account", "credit_account", "person", "category"];
+  const lines = [headers.join(",")];
+
+  for (const row of rows) {
+    let type = "transaction";
+    if (row.debit_account.startsWith("expenses:")) {
+      type = "expense";
+    } else if (row.credit_account.startsWith("income:")) {
+      type = "income";
+    } else if (row.debit_account.startsWith("assets:receivables:") || row.credit_account.startsWith("assets:receivables:") || row.debit_account.startsWith("liabilities:payables:") || row.credit_account.startsWith("liabilities:payables:")) {
+      type = "debt";
+    }
+
+    const values = [
+      String(row.id),
+      row.created_at,
+      escapeCsvField(row.description ?? ""),
+      String(row.amount),
+      type,
+      escapeCsvField(row.debit_account),
+      escapeCsvField(row.credit_account),
+      escapeCsvField(row.person ?? ""),
+      escapeCsvField(row.category ?? ""),
+    ];
+    lines.push(values.join(","));
+  }
+
+  return lines.join("\r\n");
+}
+
+async function handleCsvExport(request: Request, env: AuthEnv, context: ApiRequestContext): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  const url = new URL(request.url);
+  const filter: LedgerFilter = {
+    from: url.searchParams.get("from") ?? undefined,
+    to: url.searchParams.get("to") ?? undefined,
+    wallet: url.searchParams.get("wallet") ?? undefined,
+    category: url.searchParams.get("category") ?? undefined,
+    type: url.searchParams.get("type") ?? undefined,
+    person: url.searchParams.get("person") ?? undefined,
+    includeReversed: url.searchParams.get("includeReversed") === "true",
+  };
+
+  try {
+    const result = await getFilteredLedger(env, filter, 1, 10000);
+    const csv = buildCsv(result.items as unknown as { id: number; created_at: string; description: string | null; amount: number; debit_account: string; credit_account: string; person: string | null; category: string | null }[]);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    return new Response(csv, {
+      status: 200,
+      headers: {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="ledger-${dateStr}.csv"`,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Export failed";
+    return errorResponse(message, 400, "invalidRequest");
+  }
+}
+
+async function handleBudgetsList(env: AuthEnv, context: ApiRequestContext): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  return jsonResponse({ budgets: await listBudgets(env) });
+}
+
+async function handleBudgetCreate(request: Request, env: AuthEnv, context: ApiRequestContext): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "POST") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const body = await parseJsonBody<{ category?: string; amount?: number; period?: string }>(request).catch(() => ({}));
+
+  if (!body.category || !body.amount) {
+    return errorResponse("category and amount are required", 400, "invalidRequest");
+  }
+
+  try {
+    const budget = await upsertBudget(env, {
+      category: body.category,
+      amount: body.amount,
+      period: body.period as BudgetPeriod | undefined,
+    });
+    return jsonResponse({ budget });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Budget creation failed";
+    return errorResponse(message, 400, "invalidRequest");
+  }
+}
+
+async function handleBudgetDelete(request: Request, env: AuthEnv, context: ApiRequestContext, category: string): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "DELETE") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const deleted = await deleteBudget(env, category);
+  if (!deleted) {
+    return errorResponse("Budget not found", 404, "notFound");
+  }
+
+  return new Response(null, { status: 204 });
+}
+
+async function handlePersonDebts(env: AuthEnv, context: ApiRequestContext, person: string): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  const result = await getPersonDebts(env, person);
+  return jsonResponse(result);
+}
+
+async function handleHabitsList(env: AuthEnv, context: ApiRequestContext): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  return jsonResponse({ items: await getHabitsWithStatus(env) });
+}
+
+async function handleHabitCreate(request: Request, env: AuthEnv, context: ApiRequestContext): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "POST") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const body = await parseJsonBody<{ name?: string; description?: string; frequency?: string; targetDays?: number[] }>(request).catch(() => ({}));
+
+  if (!body.name) {
+    return errorResponse("name is required", 400, "invalidRequest");
+  }
+
+  try {
+    const habit = await createHabit(env, {
+      name: body.name,
+      description: body.description,
+      frequency: body.frequency as HabitFrequency | undefined,
+      targetDays: body.targetDays,
+    });
+    return jsonResponse({ habit });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Habit creation failed";
+    return errorResponse(message, 400, "invalidRequest");
+  }
+}
+
+async function handleHabitUpdate(request: Request, env: AuthEnv, context: ApiRequestContext, id: number): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "PATCH") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const body = await parseJsonBody<{ name?: string; description?: string; frequency?: string; targetDays?: number[] }>(request).catch(() => ({}));
+
+  const habit = await updateHabit(env, id, {
+    name: body.name,
+    description: body.description,
+    frequency: body.frequency as HabitFrequency | undefined,
+    targetDays: body.targetDays,
+  });
+
+  if (!habit) {
+    return errorResponse("Habit not found", 404, "notFound");
+  }
+
+  return jsonResponse({ habit });
+}
+
+async function handleHabitDelete(request: Request, env: AuthEnv, context: ApiRequestContext, id: number): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "DELETE") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const deleted = await deleteHabit(env, id);
+  if (!deleted) {
+    return errorResponse("Habit not found", 404, "notFound");
+  }
+
+  return new Response(null, { status: 204 });
+}
+
+async function handleHabitHistory(request: Request, env: AuthEnv, context: ApiRequestContext, id: number): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  const url = new URL(request.url);
+  const pagination = parsePagination(url, 20);
+  const result = await getCheckinHistory(env, id, pagination.page, pagination.pageSize);
+  return jsonResponse(result);
+}
+
+async function handleHabitCheckin(request: Request, env: AuthEnv, context: ApiRequestContext, id: number): Promise<Response> {
+  if (!context.account) {
+    return errorResponse("Unauthorized", 401, "unauthorized");
+  }
+
+  if (request.method !== "POST") {
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const habit = await getHabitById(env, id);
+  if (!habit) {
+    return errorResponse("Habit not found", 404, "notFound");
+  }
+
+  const body = await parseJsonBody<{ date?: string; note?: string }>(request).catch(() => ({}));
+  const checkin = await checkinHabit(env, id, { date: body.date, note: body.note });
+  return jsonResponse({ checkin });
 }
 
 async function handleFinanceStatistics(env: AuthEnv, context: ApiRequestContext): Promise<Response> {
@@ -745,8 +1068,22 @@ async function handleApiRequest(request: Request, env: AuthEnv): Promise<Respons
     return handleLogout(request, env);
   }
 
-  const protectedPaths = new Set(["/api/me", "/api/accounts", "/api/dashboard", "/api/finance/summary", "/api/finance/list", "/api/finance/statistics"]);
-  if (!protectedPaths.has(url.pathname) && !/^\/api\/accounts\/\d+$/.test(url.pathname)) {
+  const knownProtectedPatterns = [
+    /^\/api\/me$/,
+    /^\/api\/accounts/,
+    /^\/api\/dashboard$/,
+    /^\/api\/finance\/(summary|list|statistics|export\.csv)$/,
+    /^\/api\/finance\/\d+$/,
+    /^\/api\/finance\/debts\/[^/]+$/,
+    /^\/api\/budgets$/,
+    /^\/api\/budgets\/[^/]+$/,
+    /^\/api\/habits$/,
+    /^\/api\/habits\/\d+$/,
+    /^\/api\/habits\/\d+\/(history|checkin)$/,
+  ];
+
+  const isKnownProtected = knownProtectedPatterns.some((pattern) => pattern.test(url.pathname));
+  if (!isKnownProtected) {
     return errorResponse("Not found", 404, "notFound");
   }
 
@@ -775,6 +1112,70 @@ async function handleApiRequest(request: Request, env: AuthEnv): Promise<Respons
     return handleFinanceStatistics(env, context);
   }
 
+  if (url.pathname === "/api/finance/export.csv") {
+    return handleCsvExport(request, env, context);
+  }
+
+  const financeIdMatch = url.pathname.match(/^\/api\/finance\/(\d+)$/);
+  if (financeIdMatch) {
+    const id = Number(financeIdMatch[1]);
+    if (request.method === "PATCH") {
+      return handleFinanceEdit(request, env, context, id);
+    }
+    if (request.method === "DELETE") {
+      return handleFinanceDelete(request, env, context, id);
+    }
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const debtPersonMatch = url.pathname.match(/^\/api\/finance\/debts\/(.+)$/);
+  if (debtPersonMatch) {
+    return handlePersonDebts(env, context, decodeURIComponent(debtPersonMatch[1]));
+  }
+
+  if (url.pathname === "/api/budgets" && request.method === "GET") {
+    return handleBudgetsList(env, context);
+  }
+
+  if (url.pathname === "/api/budgets" && request.method === "POST") {
+    return handleBudgetCreate(request, env, context);
+  }
+
+  const budgetCategoryMatch = url.pathname.match(/^\/api\/budgets\/(.+)$/);
+  if (budgetCategoryMatch && request.method === "DELETE") {
+    return handleBudgetDelete(request, env, context, decodeURIComponent(budgetCategoryMatch[1]));
+  }
+
+  if (url.pathname === "/api/habits" && request.method === "GET") {
+    return handleHabitsList(env, context);
+  }
+
+  if (url.pathname === "/api/habits" && request.method === "POST") {
+    return handleHabitCreate(request, env, context);
+  }
+
+  const habitIdMatch = url.pathname.match(/^\/api\/habits\/(\d+)$/);
+  if (habitIdMatch) {
+    const id = Number(habitIdMatch[1]);
+    if (request.method === "PATCH") {
+      return handleHabitUpdate(request, env, context, id);
+    }
+    if (request.method === "DELETE") {
+      return handleHabitDelete(request, env, context, id);
+    }
+    return errorResponse("Method not allowed", 405, "methodNotAllowed");
+  }
+
+  const habitHistoryMatch = url.pathname.match(/^\/api\/habits\/(\d+)\/history$/);
+  if (habitHistoryMatch) {
+    return handleHabitHistory(request, env, context, Number(habitHistoryMatch[1]));
+  }
+
+  const habitCheckinMatch = url.pathname.match(/^\/api\/habits\/(\d+)\/checkin$/);
+  if (habitCheckinMatch) {
+    return handleHabitCheckin(request, env, context, Number(habitCheckinMatch[1]));
+  }
+
   if (url.pathname === "/api/dashboard") {
     return handleDashboard(request, env, context);
   }
@@ -794,12 +1195,25 @@ export {
   generateToken,
   handleAccounts,
   handleApiRequest,
+  handleBudgetCreate,
+  handleBudgetDelete,
+  handleBudgetsList,
+  handleCsvExport,
   handleDashboard,
+  handleFinanceDelete,
+  handleFinanceEdit,
   handleFinanceList,
   handleFinanceStatistics,
   handleFinanceSummary,
+  handleHabitCheckin,
+  handleHabitCreate,
+  handleHabitDelete,
+  handleHabitHistory,
+  handleHabitUpdate,
+  handleHabitsList,
   handleLogin,
   handleLogout,
+  handlePersonDebts,
   handleRefresh,
   jsonResponse,
   parsePagination,

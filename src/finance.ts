@@ -1,3 +1,6 @@
+import { enrichCategoriesWithBudgets } from "./budgets";
+import type { EnrichedCategory } from "./budgets";
+
 type FinanceIntentType =
   | "expense"
   | "income"
@@ -48,6 +51,8 @@ type LedgerEntry = {
   category?: string;
   person?: string;
   created_at: string;
+  is_reversed: number;
+  reversed_entry_id: number | null;
 };
 
 type WalletBalance = {
@@ -341,7 +346,7 @@ async function listWallets(env: FinanceEnv): Promise<WalletBalance[]> {
               COALESCE(SUM(CASE WHEN l.debit_account = a.name THEN l.amount ELSE 0 END), 0) -
               COALESCE(SUM(CASE WHEN l.credit_account = a.name THEN l.amount ELSE 0 END), 0) AS balance
        FROM accounts a
-       LEFT JOIN ledger l ON l.debit_account = a.name OR l.credit_account = a.name
+       LEFT JOIN ledger l ON (l.debit_account = a.name OR l.credit_account = a.name) AND l.is_reversed = 0
        WHERE a.name LIKE 'assets:wallets:%'
        GROUP BY a.name
        ORDER BY a.name`,
@@ -363,7 +368,7 @@ async function getDebtsSummary(env: FinanceEnv): Promise<DebtBalance[]> {
               COALESCE(SUM(CASE WHEN l.debit_account = a.name THEN l.amount ELSE 0 END), 0) -
               COALESCE(SUM(CASE WHEN l.credit_account = a.name THEN l.amount ELSE 0 END), 0) AS balance
        FROM accounts a
-       LEFT JOIN ledger l ON l.debit_account = a.name OR l.credit_account = a.name
+       LEFT JOIN ledger l ON (l.debit_account = a.name OR l.credit_account = a.name) AND l.is_reversed = 0
        WHERE a.name LIKE 'assets:receivables:%' OR a.name LIKE 'liabilities:payables:%'
        GROUP BY a.name
        HAVING balance != 0
@@ -390,7 +395,7 @@ async function getFinanceBalances(env: FinanceEnv): Promise<FinanceBalances> {
               COALESCE(SUM(CASE WHEN l.debit_account = a.name THEN l.amount ELSE 0 END), 0) -
               COALESCE(SUM(CASE WHEN l.credit_account = a.name THEN l.amount ELSE 0 END), 0) AS balance
        FROM accounts a
-       LEFT JOIN ledger l ON l.debit_account = a.name OR l.credit_account = a.name
+       LEFT JOIN ledger l ON (l.debit_account = a.name OR l.credit_account = a.name) AND l.is_reversed = 0
        WHERE a.name LIKE 'expenses:%' OR a.name LIKE 'income:%'
        GROUP BY a.name, a.type
        HAVING balance != 0
@@ -398,15 +403,19 @@ async function getFinanceBalances(env: FinanceEnv): Promise<FinanceBalances> {
     )
     .all<{ account: string; type: "expense" | "income"; balance: number }>();
 
+  const categoryBalances = categories.results.map((row) => ({
+    account: row.account,
+    category: row.account.replace(row.type === "expense" ? "expenses:" : "income:", ""),
+    type: row.type,
+    balance: Math.abs(Number(row.balance)),
+  }));
+
+  const enriched = await enrichCategoriesWithBudgets(env, categoryBalances as EnrichedCategory[]);
+
   return {
     wallets: await listWallets(env),
     debts: await getDebtsSummary(env),
-    categories: categories.results.map((row) => ({
-      account: row.account,
-      category: row.account.replace(row.type === "expense" ? "expenses:" : "income:", ""),
-      type: row.type,
-      balance: Math.abs(Number(row.balance)),
-    })),
+    categories: enriched,
   };
 }
 
@@ -414,11 +423,302 @@ async function getLedger(env: FinanceEnv, limit = 100): Promise<LedgerEntry[]> {
   const db = requireDb(env);
   const safeLimit = Math.min(Math.max(limit, 1), 100);
   const result = await db
-    .prepare("SELECT * FROM ledger ORDER BY id DESC LIMIT ?")
+    .prepare("SELECT * FROM ledger WHERE is_reversed = 0 ORDER BY id DESC LIMIT ?")
     .bind(safeLimit)
     .all<LedgerEntry>();
 
   return result.results;
+}
+
+type LedgerFilter = {
+  from?: string;
+  to?: string;
+  wallet?: string;
+  category?: string;
+  type?: string;
+  person?: string;
+  includeReversed?: boolean;
+};
+
+type FilteredLedgerResult = {
+  items: LedgerEntry[];
+  total: number;
+};
+
+function isValidDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+async function getFilteredLedger(env: FinanceEnv, filter: LedgerFilter, page: number, pageSize: number): Promise<{ items: LedgerEntry[]; total: number; page: number; pageSize: number; totalPages: number }> {
+  const db = requireDb(env);
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (!filter.includeReversed) {
+    conditions.push("is_reversed = 0");
+  }
+
+  if (filter.from) {
+    if (!isValidDate(filter.from)) {
+      throw new Error("Invalid 'from' date format. Use YYYY-MM-DD.");
+    }
+    conditions.push("created_at >= ?");
+    params.push(filter.from + "T00:00:00Z");
+  }
+
+  if (filter.to) {
+    if (!isValidDate(filter.to)) {
+      throw new Error("Invalid 'to' date format. Use YYYY-MM-DD.");
+    }
+    conditions.push("created_at <= ?");
+    params.push(filter.to + "T23:59:59Z");
+  }
+
+  if (filter.wallet) {
+    const wallet = `assets:wallets:${slug(filter.wallet)}`;
+    conditions.push("(debit_account = ? OR credit_account = ?)");
+    params.push(wallet, wallet);
+  }
+
+  if (filter.category) {
+    conditions.push("category = ?");
+    params.push(slug(filter.category));
+  }
+
+  if (filter.person) {
+    conditions.push("person = ?");
+    params.push(slug(filter.person));
+  }
+
+  if (filter.type) {
+    if (filter.type === "debt") {
+      conditions.push("(debit_account LIKE 'assets:receivables:%' OR debit_account LIKE 'liabilities:payables:%' OR credit_account LIKE 'assets:receivables:%' OR credit_account LIKE 'liabilities:payables:%')");
+    } else if (filter.type === "expense") {
+      conditions.push("debit_account LIKE 'expenses:%'");
+    } else if (filter.type === "income") {
+      conditions.push("credit_account LIKE 'income:%'");
+    }
+  }
+
+  const whereClause = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+  const totalRow = await db
+    .prepare(`SELECT COUNT(*) AS total FROM ledger ${whereClause}`)
+    .bind(...params)
+    .first<{ total: number }>();
+  const total = Number(totalRow?.total ?? 0);
+  const offset = (page - 1) * pageSize;
+  const rows = await db
+    .prepare(`SELECT * FROM ledger ${whereClause} ORDER BY id DESC LIMIT ? OFFSET ?`)
+    .bind(...params, pageSize, offset)
+    .all<LedgerEntry>();
+
+  return {
+    items: rows.results,
+    total,
+    page,
+    pageSize,
+    totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+  };
+}
+
+async function reverseTransaction(env: FinanceEnv, id: number): Promise<{ reversalId: number }> {
+  const db = requireDb(env);
+  const original = await db
+    .prepare("SELECT * FROM ledger WHERE id = ?")
+    .bind(id)
+    .first<LedgerEntry>();
+
+  if (!original) {
+    throw new Error("Transaction not found");
+  }
+
+  if (original.is_reversed === 1) {
+    throw new Error("Transaction is already reversed");
+  }
+
+  const reversalDescription = `[REVERSAL] ${original.description ?? ""}`;
+  const result = await db
+    .prepare(
+      "INSERT INTO ledger (debit_account, credit_account, amount, description, category, person) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(
+      original.credit_account,
+      original.debit_account,
+      original.amount,
+      reversalDescription,
+      original.category ?? null,
+      original.person ?? null,
+    )
+    .run();
+
+  const reversalId = result.meta.last_row_id;
+  await db
+    .prepare("UPDATE ledger SET is_reversed = 1, reversed_entry_id = ? WHERE id = ?")
+    .bind(reversalId, id)
+    .run();
+
+  return { reversalId: Number(reversalId) };
+}
+
+async function editTransaction(
+  env: FinanceEnv,
+  id: number,
+  updates: { amount?: number; description?: string; category?: string },
+): Promise<{ reversalId: number; newEntryId: number }> {
+  const db = requireDb(env);
+  const original = await db
+    .prepare("SELECT * FROM ledger WHERE id = ?")
+    .bind(id)
+    .first<LedgerEntry>();
+
+  if (!original) {
+    throw new Error("Transaction not found");
+  }
+
+  if (original.is_reversed === 1) {
+    throw new Error("Transaction is already reversed");
+  }
+
+  const { reversalId } = await reverseTransaction(env, id);
+
+  const newAmount = updates.amount ?? original.amount;
+  const newDescription = updates.description ?? original.description ?? "";
+  const newCategory = updates.category ?? original.category ?? null;
+
+  if (!Number.isInteger(newAmount) || newAmount <= 0) {
+    throw new Error("amount must be a positive integer");
+  }
+  if (!newDescription.trim()) {
+    throw new Error("description is required");
+  }
+
+  const result = await db
+    .prepare(
+      "INSERT INTO ledger (debit_account, credit_account, amount, description, category, person) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(
+      original.debit_account,
+      original.credit_account,
+      newAmount,
+      newDescription,
+      newCategory,
+      original.person ?? null,
+    )
+    .run();
+
+  return { reversalId, newEntryId: Number(result.meta.last_row_id) };
+}
+
+type PersonDebtDetail = {
+  id: number;
+  date: string;
+  intent: string;
+  amount: number;
+  description: string | null;
+  wallet: string | null;
+};
+
+type PersonDebtResult = {
+  person: string;
+  receivable: number;
+  payable: number;
+  net: number;
+  direction: "they_owe_me" | "i_owe_them" | "settled";
+  transactions: PersonDebtDetail[];
+};
+
+async function getPersonDebts(env: FinanceEnv, person: string): Promise<PersonDebtResult> {
+  const db = requireDb(env);
+  const personSlug = slug(person);
+  const receivableAccount = `assets:receivables:${personSlug}`;
+  const payableAccount = `liabilities:payables:${personSlug}`;
+
+  const receivableRow = await db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN l.debit_account = ? THEN l.amount ELSE 0 END), 0) -
+              COALESCE(SUM(CASE WHEN l.credit_account = ? THEN l.amount ELSE 0 END), 0) AS balance
+       FROM ledger l
+       WHERE (l.debit_account = ? OR l.credit_account = ?) AND l.is_reversed = 0`,
+    )
+    .bind(receivableAccount, receivableAccount, receivableAccount, receivableAccount)
+    .first<{ balance: number }>();
+
+  const payableRow = await db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN l.debit_account = ? THEN l.amount ELSE 0 END), 0) -
+              COALESCE(SUM(CASE WHEN l.credit_account = ? THEN l.amount ELSE 0 END), 0) AS balance
+       FROM ledger l
+       WHERE (l.debit_account = ? OR l.credit_account = ?) AND l.is_reversed = 0`,
+    )
+    .bind(payableAccount, payableAccount, payableAccount, payableAccount)
+    .first<{ balance: number }>();
+
+  const receivable = Math.abs(Number(receivableRow?.balance ?? 0));
+  const payable = Math.abs(Number(payableRow?.balance ?? 0));
+  const net = receivable - payable;
+
+  const direction: PersonDebtResult["direction"] = net > 0 ? "they_owe_me" : net < 0 ? "i_owe_them" : "settled";
+
+  const transactionsResult = await db
+    .prepare(
+      `SELECT id, created_at, debit_account, credit_account, amount, description
+       FROM ledger
+       WHERE (debit_account = ? OR credit_account = ? OR debit_account = ? OR credit_account = ?)
+         AND is_reversed = 0
+       ORDER BY id DESC LIMIT 50`,
+    )
+    .bind(receivableAccount, receivableAccount, payableAccount, payableAccount)
+    .all<{
+      id: number;
+      created_at: string;
+      debit_account: string;
+      credit_account: string;
+      amount: number;
+      description: string | null;
+    }>();
+
+  const transactions: PersonDebtDetail[] = transactionsResult.results.map((row) => {
+    let intent = "transaction";
+    let wallet: string | null = null;
+
+    if (row.debit_account.startsWith("assets:receivables:")) {
+      intent = "debt_lend";
+      wallet = row.credit_account.replace("assets:wallets:", "");
+    } else if (row.credit_account.startsWith("assets:receivables:")) {
+      intent = "debt_lend_collect";
+      wallet = row.debit_account.replace("assets:wallets:", "");
+    } else if (row.debit_account.startsWith("liabilities:payables:")) {
+      intent = "debt_owe_pay";
+      wallet = row.credit_account.replace("assets:wallets:", "");
+    } else if (row.credit_account.startsWith("liabilities:payables:")) {
+      intent = "debt_owe";
+      wallet = null;
+    } else if (row.debit_account.startsWith("assets:wallets:") && row.credit_account.startsWith("liabilities:payables:")) {
+      intent = "debt_borrow";
+      wallet = row.debit_account.replace("assets:wallets:", "");
+    } else if (row.debit_account.startsWith("liabilities:payables:") && row.credit_account.startsWith("assets:wallets:")) {
+      intent = "debt_borrow_pay";
+      wallet = row.credit_account.replace("assets:wallets:", "");
+    }
+
+    return {
+      id: row.id,
+      date: row.created_at,
+      intent,
+      amount: row.amount,
+      description: row.description,
+      wallet,
+    };
+  });
+
+  return {
+    person: personSlug,
+    receivable,
+    payable,
+    net,
+    direction,
+    transactions,
+  };
 }
 
 async function addReminder(env: FinanceEnv, input: AddReminderInput): Promise<FinanceToolResult> {
@@ -529,15 +829,19 @@ async function executeFinanceToolCall(env: FinanceEnv, name: string, args: Recor
 export {
   addReminder,
   createNewWallet,
+  editTransaction,
   executeFinanceToolCall,
   getDebtsSummary,
   getDueReminders,
+  getFilteredLedger,
   getFinanceBalances,
   getLedger,
+  getPersonDebts,
   getReminders,
   listWallets,
   markReminderSent,
   recordTransaction,
+  reverseTransaction,
   slug,
 };
 export type {
@@ -550,6 +854,8 @@ export type {
   FinanceIntentType,
   FinanceToolResult,
   LedgerEntry,
+  LedgerFilter,
+  PersonDebtResult,
   RecordTransactionInput,
   Reminder,
   ReminderDirection,

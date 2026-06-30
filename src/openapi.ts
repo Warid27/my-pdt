@@ -302,6 +302,177 @@ const openApiSpec = {
         },
       },
     },
+    "/api/finance/{id}": {
+      patch: {
+        summary: "Edit a transaction (creates reversal + new entry)",
+        tags: ["Finance"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: schemaRef("EditTransactionRequest") } },
+        },
+        responses: {
+          "200": { description: "Edit result", content: { "application/json": { schema: schemaRef("EditTransactionResponse") } } },
+          "401": unauthorizedResponse,
+          "404": { description: "Not found", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+          "409": { description: "Already reversed", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+        },
+      },
+      delete: {
+        summary: "Soft-delete a transaction (creates reversal entry)",
+        tags: ["Finance"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        responses: {
+          "200": { description: "Reversal result", content: { "application/json": { schema: schemaRef("DeleteTransactionResponse") } } },
+          "401": unauthorizedResponse,
+          "404": { description: "Not found", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+          "409": { description: "Already reversed", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+        },
+      },
+    },
+    "/api/finance/export.csv": {
+      get: {
+        summary: "Export ledger as CSV",
+        tags: ["Finance"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "from", in: "query", required: false, schema: { type: "string", format: "date" } },
+          { name: "to", in: "query", required: false, schema: { type: "string", format: "date" } },
+          { name: "wallet", in: "query", required: false, schema: { type: "string" } },
+          { name: "category", in: "query", required: false, schema: { type: "string" } },
+          { name: "type", in: "query", required: false, schema: { type: "string", enum: ["expense", "income", "debt"] } },
+          { name: "person", in: "query", required: false, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "CSV file" },
+          "401": unauthorizedResponse,
+        },
+      },
+    },
+    "/api/finance/debts/{person}": {
+      get: {
+        summary: "Get per-person debt breakdown",
+        tags: ["Finance"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "person", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "200": { description: "Debt breakdown", content: { "application/json": { schema: schemaRef("PersonDebtResult") } } },
+          "401": unauthorizedResponse,
+        },
+      },
+    },
+    "/api/budgets": {
+      get: {
+        summary: "List all budgets",
+        tags: ["Budgets"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Budget list", content: { "application/json": { schema: schemaRef("BudgetListResponse") } } },
+          "401": unauthorizedResponse,
+        },
+      },
+      post: {
+        summary: "Create or replace a budget",
+        tags: ["Budgets"],
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { "application/json": { schema: schemaRef("BudgetInput") } } },
+        responses: {
+          "200": { description: "Created budget", content: { "application/json": { schema: schemaRef("BudgetResponse") } } },
+          "401": unauthorizedResponse,
+        },
+      },
+    },
+    "/api/budgets/{category}": {
+      delete: {
+        summary: "Remove a budget",
+        tags: ["Budgets"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "category", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "204": { description: "Deleted" },
+          "401": unauthorizedResponse,
+          "404": { description: "Not found", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+        },
+      },
+    },
+    "/api/habits": {
+      get: {
+        summary: "List all active habits with today's status",
+        tags: ["Habits"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Habit list", content: { "application/json": { schema: schemaRef("HabitListResponse") } } },
+          "401": unauthorizedResponse,
+        },
+      },
+      post: {
+        summary: "Create a new habit",
+        tags: ["Habits"],
+        security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { "application/json": { schema: schemaRef("HabitInput") } } },
+        responses: {
+          "200": { description: "Created habit", content: { "application/json": { schema: schemaRef("HabitResponse") } } },
+          "401": unauthorizedResponse,
+        },
+      },
+    },
+    "/api/habits/{id}": {
+      patch: {
+        summary: "Update a habit",
+        tags: ["Habits"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        requestBody: { required: true, content: { "application/json": { schema: schemaRef("HabitInput") } } },
+        responses: {
+          "200": { description: "Updated habit", content: { "application/json": { schema: schemaRef("HabitResponse") } } },
+          "401": unauthorizedResponse,
+          "404": { description: "Not found", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+        },
+      },
+      delete: {
+        summary: "Soft-delete a habit",
+        tags: ["Habits"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        responses: {
+          "204": { description: "Deleted" },
+          "401": unauthorizedResponse,
+          "404": { description: "Not found", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+        },
+      },
+    },
+    "/api/habits/{id}/history": {
+      get: {
+        summary: "Get paginated checkin history for a habit",
+        tags: ["Habits"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } },
+          schemaRef("PageParam"),
+          schemaRef("PageSizeParam"),
+        ],
+        responses: {
+          "200": { description: "Checkin history", content: { "application/json": { schema: schemaRef("CheckinHistoryResponse") } } },
+          "401": unauthorizedResponse,
+        },
+      },
+    },
+    "/api/habits/{id}/checkin": {
+      post: {
+        summary: "Check in a habit for a given date",
+        tags: ["Habits"],
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }],
+        requestBody: { required: false, content: { "application/json": { schema: schemaRef("CheckinInput") } } },
+        responses: {
+          "200": { description: "Checkin result", content: { "application/json": { schema: schemaRef("CheckinResponse") } } },
+          "401": unauthorizedResponse,
+          "404": { description: "Not found", content: { "application/json": { schema: schemaRef("ErrorResponse") } } },
+        },
+      },
+    },
     "/openapi.json": {
       get: {
         summary: "Get this OpenAPI document",
@@ -474,6 +645,182 @@ const openApiSpec = {
           statistics: schemaRef("FinanceStats"),
           recentTransactions: schemaRef("FinanceListResponse"),
         },
+      },
+      EditTransactionRequest: {
+        type: "object",
+        properties: {
+          amount: { type: "integer", minimum: 1 },
+          description: { type: "string" },
+          category: { type: "string" },
+        },
+      },
+      EditTransactionResponse: {
+        type: "object",
+        required: ["reversalId", "newEntryId"],
+        properties: { reversalId: { type: "integer" }, newEntryId: { type: "integer" } },
+      },
+      DeleteTransactionResponse: {
+        type: "object",
+        required: ["reversalId"],
+        properties: { reversalId: { type: "integer" } },
+      },
+      PersonDebtResult: {
+        type: "object",
+        required: ["person", "receivable", "payable", "net", "direction", "transactions"],
+        properties: {
+          person: { type: "string" },
+          receivable: { type: "number" },
+          payable: { type: "number" },
+          net: { type: "number" },
+          direction: { type: "string", enum: ["they_owe_me", "i_owe_them", "settled"] },
+          transactions: { type: "array", items: schemaRef("PersonDebtTransaction") },
+        },
+      },
+      PersonDebtTransaction: {
+        type: "object",
+        required: ["id", "date", "intent", "amount", "description", "wallet"],
+        properties: {
+          id: { type: "integer" },
+          date: { type: "string", format: "date-time" },
+          intent: { type: "string" },
+          amount: { type: "number" },
+          description: { type: ["string", "null"] },
+          wallet: { type: ["string", "null"] },
+        },
+      },
+      BudgetInput: {
+        type: "object",
+        required: ["category", "amount"],
+        properties: {
+          category: { type: "string" },
+          amount: { type: "integer", minimum: 1 },
+          period: { type: "string", enum: ["monthly", "weekly"] },
+        },
+      },
+      BudgetResponse: {
+        type: "object",
+        required: ["budget"],
+        properties: {
+          budget: {
+            type: "object",
+            required: ["id", "category", "amount", "period", "createdAt", "updatedAt"],
+            properties: {
+              id: { type: "integer" },
+              category: { type: "string" },
+              amount: { type: "integer" },
+              period: { type: "string", enum: ["monthly", "weekly"] },
+              createdAt: { type: "string", format: "date-time" },
+              updatedAt: { type: "string", format: "date-time" },
+            },
+          },
+        },
+      },
+      BudgetListResponse: {
+        type: "object",
+        required: ["budgets"],
+        properties: { budgets: { type: "array", items: schemaRef("BudgetInput") } },
+      },
+      HabitInput: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name: { type: "string" },
+          description: { type: "string" },
+          frequency: { type: "string", enum: ["daily", "weekly"] },
+          targetDays: { type: "array", items: { type: "number" } },
+        },
+      },
+      HabitResponse: {
+        type: "object",
+        required: ["habit"],
+        properties: {
+          habit: {
+            type: "object",
+            required: ["id", "name", "frequency", "isActive", "createdAt"],
+            properties: {
+              id: { type: "integer" },
+              name: { type: "string" },
+              description: { type: ["string", "null"] },
+              frequency: { type: "string", enum: ["daily", "weekly"] },
+              targetDays: { type: ["array", "null"], items: { type: "number" } },
+              isActive: { type: "boolean" },
+              createdAt: { type: "string", format: "date-time" },
+            },
+          },
+        },
+      },
+      HabitListResponse: {
+        type: "object",
+        required: ["items"],
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["id", "name", "frequency", "checkedToday", "currentStreak", "bestStreak", "completionThisMonth"],
+              properties: {
+                id: { type: "integer" },
+                name: { type: "string" },
+                description: { type: ["string", "null"] },
+                frequency: { type: "string", enum: ["daily", "weekly"] },
+                targetDays: { type: ["array", "null"], items: { type: "number" } },
+                checkedToday: { type: "boolean" },
+                currentStreak: { type: "integer" },
+                bestStreak: { type: "integer" },
+                completionThisMonth: { type: "number" },
+              },
+            },
+          },
+        },
+      },
+      CheckinInput: {
+        type: "object",
+        properties: {
+          date: { type: "string", format: "date" },
+          note: { type: "string" },
+        },
+      },
+      CheckinResponse: {
+        type: "object",
+        required: ["checkin"],
+        properties: {
+          checkin: {
+            type: "object",
+            required: ["id", "habitId", "checkedAt", "date"],
+            properties: {
+              id: { type: "integer" },
+              habitId: { type: "integer" },
+              checkedAt: { type: "string", format: "date-time" },
+              date: { type: "string", format: "date" },
+              note: { type: ["string", "null"] },
+            },
+          },
+        },
+      },
+      CheckinHistoryResponse: {
+        allOf: [
+          schemaRef("Pagination"),
+          {
+            type: "object",
+            required: ["items"],
+            properties: {
+              items: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["id", "habitId", "checkedAt", "date"],
+                  properties: {
+                    id: { type: "integer" },
+                    habitId: { type: "integer" },
+                    checkedAt: { type: "string", format: "date-time" },
+                    date: { type: "string", format: "date" },
+                    note: { type: ["string", "null"] },
+                  },
+                },
+              },
+            },
+          },
+        ],
       },
     },
   },

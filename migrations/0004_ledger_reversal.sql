@@ -1,0 +1,2 @@
+ALTER TABLE ledger ADD COLUMN is_reversed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ledger ADD COLUMN reversed_entry_id INTEGER REFERENCES ledger(id);

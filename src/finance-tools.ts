@@ -127,5 +127,5 @@ function isFinanceToolName(value: string): value is FinanceToolName {
   return financeToolNames.has(value as FinanceToolName);
 }
 
-export { financeTools, isFinanceToolName };
+export { financeTools, financeToolNames, isFinanceToolName };
 export type { FinanceToolCall, FinanceToolName, ToolDefinition };

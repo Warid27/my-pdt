@@ -720,7 +720,7 @@ describe("handleRequest", () => {
 
     const logs = await readLogs(env);
     const aiResponse = logs.find((log) => log.event === "ai_response");
-    const toolCall = logs.find((log) => log.event === "finance_tool_call");
+    const toolCall = logs.find((log) => log.event === "tool_call");
     expect(aiResponse?.detail).toContain('"prompt_tokens":20');
     expect(toolCall?.detail).toContain('"wallet_name":"cash"');
   });
@@ -949,16 +949,30 @@ describe("handleRequest", () => {
       expect(await response.json()).toEqual({
         method: "sendMessage",
         chat_id: 123,
-        text: "Available commands:\n/commands - show this help\n/help - show this help\n/start - show this help\nNatural language examples:\n- gajian 6jt ke kantong utama\n- beli bakso 10k pake cash\n- Helmi pinjem 12k\n- lihat wallet\n- hapus wallet <nama> (not supported)",
+        parse_mode: "HTML",
+        text: [
+          "<b>💰 Finance</b>",
+          "• <i>gajian 6jt ke kantong utama</i> — catat pemasukan",
+          "• <i>beli bakso 10k pake cash</i> — catat pengeluaran",
+          "• <i>lihat wallet</i> — cek saldo semua wallet",
+          "• <i>Helmi pinjem 12k</i> — catat hutang",
+          "",
+          "<b>✅ Habits</b>",
+          "• <i>buat habit olahraga setiap hari</i> — buat habit baru",
+          "• <i>udah olahraga hari ini</i> — check in habit",
+          "• <i>habits hari ini apa aja</i> — lihat status habit",
+          "• <i>streak olahraga berapa</i> — lihat statistik streak",
+          "",
+          "<b>⚙️ Settings</b>",
+          "• <i>/commands</i> — tampilkan bantuan ini",
+          "• <i>/help</i> — tampilkan bantuan ini",
+          "• <i>/start</i> — tampilkan bantuan ini",
+        ].join("\n"),
         reply_markup: {
-          keyboard: [
-            [{ text: "/commands" }, { text: "/help" }, { text: "/start" }],
-            [{ text: "lihat wallet" }, { text: "gajian 6jt ke kantong utama" }],
-            [{ text: "beli bakso 10k pake cash" }, { text: "Helmi pinjem 12k" }],
+          inline_keyboard: [
+            [{ text: "💰 Cek saldo", callback_data: "get_wallets" }, { text: "💸 Cek hutang", callback_data: "get_debts" }],
+            [{ text: "✅ Habits hari ini", callback_data: "get_habits_today" }],
           ],
-          resize_keyboard: true,
-          one_time_keyboard: false,
-          is_persistent: true,
         },
       });
     } finally {
@@ -1007,16 +1021,12 @@ describe("handleRequest", () => {
         expect(await response.json()).toMatchObject({
           method: "sendMessage",
           chat_id: 123,
-          text: "Available commands:\n/commands - show this help\n/help - show this help\n/start - show this help\nNatural language examples:\n- gajian 6jt ke kantong utama\n- beli bakso 10k pake cash\n- Helmi pinjem 12k\n- lihat wallet\n- hapus wallet <nama> (not supported)",
+          parse_mode: "HTML",
           reply_markup: {
-            keyboard: [
-              [{ text: "/commands" }, { text: "/help" }, { text: "/start" }],
-              [{ text: "lihat wallet" }, { text: "gajian 6jt ke kantong utama" }],
-              [{ text: "beli bakso 10k pake cash" }, { text: "Helmi pinjem 12k" }],
+            inline_keyboard: [
+              [{ text: "💰 Cek saldo", callback_data: "get_wallets" }, { text: "💸 Cek hutang", callback_data: "get_debts" }],
+              [{ text: "✅ Habits hari ini", callback_data: "get_habits_today" }],
             ],
-            resize_keyboard: true,
-            one_time_keyboard: false,
-            is_persistent: true,
           },
         });
       }
@@ -1025,5 +1035,135 @@ describe("handleRequest", () => {
     }
 
     expect(calls).toHaveLength(0);
+  });
+});
+
+import { habitTools, isHabitToolName } from "../src/habit-tools";
+import { calculateStreak, wibDate, slug, formatHabitsToday, formatHabitStreak } from "../src/habits";
+import type { HabitWithStatus } from "../src/habits";
+import { reverseTransaction, editTransaction, getFilteredLedger, getPersonDebts } from "../src/finance";
+import { listBudgets, upsertBudget, deleteBudget, computePeriodStart, slug as budgetSlug } from "../src/budgets";
+
+describe("habit tools", () => {
+  it("defines all four habit tool definitions", () => {
+    const names = habitTools.map((tool) => tool.function.name);
+    expect(names).toContain("create_habit");
+    expect(names).toContain("checkin_habit");
+    expect(names).toContain("get_habits_today");
+    expect(names).toContain("get_habit_streak");
+    expect(habitTools).toHaveLength(4);
+  });
+
+  it("isHabitToolName correctly identifies habit tools", () => {
+    expect(isHabitToolName("create_habit")).toBe(true);
+    expect(isHabitToolName("checkin_habit")).toBe(true);
+    expect(isHabitToolName("get_habits_today")).toBe(true);
+    expect(isHabitToolName("get_habit_streak")).toBe(true);
+    expect(isHabitToolName("get_wallets")).toBe(false);
+    expect(isHabitToolName("record_transaction")).toBe(false);
+  });
+});
+
+describe("habit utilities", () => {
+  it("slug normalizes names", () => {
+    expect(slug("Olahraga Pagi")).toBe("olahraga_pagi");
+    expect(slug("baca buku!")).toBe("baca_buku");
+    expect(slug("  Meditation  ")).toBe("meditation");
+  });
+
+  it("wibDate returns YYYY-MM-DD format", () => {
+    const date = wibDate();
+    expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("calculateStreak computes current and best streaks", () => {
+    const today = "2026-06-29";
+    const dates = ["2026-06-29", "2026-06-28", "2026-06-27", "2026-06-25"];
+    const { current, best } = calculateStreak(dates, today);
+    expect(current).toBe(3);
+    expect(best).toBe(3);
+  });
+
+  it("calculateStreak returns 0 for empty dates", () => {
+    const { current, best } = calculateStreak([], "2026-06-29");
+    expect(current).toBe(0);
+    expect(best).toBe(0);
+  });
+
+  it("calculateStreak handles non-consecutive gaps", () => {
+    const today = "2026-06-29";
+    const dates = ["2026-06-29", "2026-06-27", "2026-06-26"];
+    const { current, best } = calculateStreak(dates, today);
+    expect(current).toBe(1);
+    expect(best).toBe(2);
+  });
+
+  it("formatHabitsToday formats habit list", () => {
+    const habits: HabitWithStatus[] = [
+      { id: 1, name: "olahraga", description: null, frequency: "daily", targetDays: null, checkedToday: true, currentStreak: 5, bestStreak: 10, completionThisMonth: 0.8 },
+      { id: 2, name: "baca_buku", description: null, frequency: "daily", targetDays: null, checkedToday: false, currentStreak: 0, bestStreak: 3, completionThisMonth: 0.2 },
+    ];
+    const text = formatHabitsToday(habits);
+    expect(text).toContain("✅ olahraga");
+    expect(text).toContain("❌ baca_buku");
+    expect(text).toContain("1/2 selesai");
+  });
+
+  it("formatHabitStreak formats streak info", () => {
+    const habit: HabitWithStatus = {
+      id: 1, name: "olahraga", description: null, frequency: "daily", targetDays: null,
+      checkedToday: true, currentStreak: 7, bestStreak: 14, completionThisMonth: 0.9,
+    };
+    const text = formatHabitStreak(habit);
+    expect(text).toContain("🔥 olahraga");
+    expect(text).toContain("Streak sekarang: 7 hari");
+    expect(text).toContain("Streak terbaik: 14 hari");
+    expect(text).toContain("%");
+  });
+});
+
+describe("budget utilities", () => {
+  it("budgetSlug normalizes category names", () => {
+    expect(budgetSlug("Makanan & Minuman")).toBe("makanan_minuman");
+    expect(budgetSlug("Transport")).toBe("transport");
+  });
+
+  it("computePeriodStart returns correct start for monthly", () => {
+    const now = new Date("2026-06-15T10:00:00Z");
+    const start = computePeriodStart("monthly", now);
+    expect(start).toBe("2026-06-01");
+  });
+
+  it("computePeriodStart returns correct start for weekly", () => {
+    const now = new Date("2026-06-29T10:00:00Z");
+    const start = computePeriodStart("weekly", now);
+    expect(start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("finance reversal and filtering", () => {
+  it("reverseTransaction throws for non-existent id", async () => {
+    const db = createMockD1();
+    await expect(reverseTransaction({ DB: db } as never, 9999)).rejects.toThrow("not found");
+  });
+
+  it("getFilteredLedger returns paginated results", async () => {
+    const db = createMockD1();
+    const result = await getFilteredLedger({ DB: db } as never, {}, 1, 20);
+    expect(result.page).toBe(1);
+    expect(result.pageSize).toBe(20);
+    expect(result.items).toEqual([]);
+    expect(result.total).toBe(0);
+  });
+
+  it("getPersonDebts returns settled state for unknown person", async () => {
+    const db = createMockD1();
+    const result = await getPersonDebts({ DB: db } as never, "unknown");
+    expect(result.person).toBe("unknown");
+    expect(result.receivable).toBe(0);
+    expect(result.payable).toBe(0);
+    expect(result.net).toBe(0);
+    expect(result.direction).toBe("settled");
+    expect(result.transactions).toEqual([]);
   });
 });
