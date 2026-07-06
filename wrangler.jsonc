@@ -10,5 +10,8 @@
       "database_id": "b68417a8-621c-4707-94eb-59be7556564b",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "vars": {
+    "FRONTEND_URL": ""
+  }
 }
