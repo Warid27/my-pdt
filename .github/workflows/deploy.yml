@@ -46,7 +46,7 @@ jobs:
               -X POST "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               -H "Content-Type: application/json" \
-              -d "{\"name\": \"${PROJECT_NAME}\"}")
+              -d "{\"name\": \"${PROJECT_NAME}\", \"production_branch\": \"frontend\"}")
             
             if [ "$CREATE_CODE" = "200" ]; then
               echo "✅ Project created successfully"
