@@ -12,6 +12,6 @@
     }
   ],
   "vars": {
-    "FRONTEND_URL": ""
+    "FRONTEND_URL": "https://mypdt.warid.web.id"
   }
 }
