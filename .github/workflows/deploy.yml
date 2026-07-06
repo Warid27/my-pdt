@@ -6,6 +6,11 @@ on:
       - frontend
   workflow_dispatch:
 
+env:
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  PROJECT_NAME: my-pdt-frontend
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -20,11 +25,43 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build Astro project
+      - name: Typecheck
+        run: bunx astro check
+
+      - name: Build
         run: bun run build
 
+      - name: Create Cloudflare Pages project if not exists
+        run: |
+          # Check if project exists
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X GET "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PROJECT_NAME}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json")
+          
+          if [ "$HTTP_CODE" = "404" ]; then
+            echo "Project not found. Creating ${PROJECT_NAME}..."
+            RESP_FILE=$(mktemp)
+            CREATE_CODE=$(curl -s -o "$RESP_FILE" -w "%{http_code}" \
+              -X POST "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\": \"${PROJECT_NAME}\"}")
+            
+            if [ "$CREATE_CODE" = "200" ]; then
+              echo "✅ Project created successfully"
+            else
+              echo "❌ Failed to create project (HTTP $CREATE_CODE):"
+              cat "$RESP_FILE"
+              exit 1
+            fi
+            rm -f "$RESP_FILE"
+          elif [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Project already exists"
+          else
+            echo "❌ Unexpected response code: $HTTP_CODE"
+            exit 1
+          fi
+
       - name: Deploy to Cloudflare Pages
-        run: bunx wrangler pages deploy dist --project-name=my-pdt-frontend --branch=frontend --commit-dirty=true
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bunx wrangler pages deploy dist --project-name=${PROJECT_NAME} --branch=frontend --commit-dirty=true
