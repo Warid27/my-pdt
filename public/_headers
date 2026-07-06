@@ -1,25 +1,4 @@
-/api/*
-  Access-Control-Allow-Origin: https://mypdt.warid.web.id
-  Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
-  Access-Control-Allow-Headers: Content-Type, Authorization
-  Access-Control-Allow-Credentials: true
-  Access-Control-Max-Age: 86400
-
-/finance/*
-  Access-Control-Allow-Origin: https://mypdt.warid.web.id
-  Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
-  Access-Control-Allow-Headers: Content-Type, Authorization
-  Access-Control-Allow-Credentials: true
-  Access-Control-Max-Age: 86400
-
-/health
-  Access-Control-Allow-Origin: https://mypdt.warid.web.id
-  Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
-  Access-Control-Allow-Headers: Content-Type, Authorization
-  Access-Control-Allow-Credentials: true
-  Access-Control-Max-Age: 86400
-
-/logs
+/*
   Access-Control-Allow-Origin: https://mypdt.warid.web.id
   Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS
   Access-Control-Allow-Headers: Content-Type, Authorization
