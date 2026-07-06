@@ -24,6 +24,14 @@ type TelegramUpdate = {
   message?: TelegramMessage;
 };
 
+type InitSession = {
+  chat_id: string;
+  step: "confirm" | "mode" | "amount";
+  confirm_code: string;
+  reset_mode: "archive" | "hard_reset" | null;
+  created_at: string;
+};
+
 type Env = {
   TELEGRAM_WEBHOOK_SECRET: string;
   TELEGRAM_TOKEN?: string;
@@ -115,6 +123,224 @@ function logDetail(value: unknown): string {
   return truncateText(JSON.stringify(redactSensitive(value)));
 }
 
+// === Init / Reset Helpers ===
+
+const INIT_SESSION_TIMEOUT_MS = 10 * 60 * 1000;
+
+function generateConfirmCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const array = new Uint8Array(6);
+  crypto.getRandomValues(array);
+  let code = "";
+  for (let index = 0; index < 6; index++) {
+    code += chars[array[index] % chars.length];
+  }
+  return code;
+}
+
+async function getInitSession(env: Env, chatId: string): Promise<InitSession | null> {
+  if (!env.DB) {
+    return null;
+  }
+
+  const row = await env.DB
+    .prepare("SELECT chat_id, step, confirm_code, reset_mode, created_at FROM init_sessions WHERE chat_id = ?")
+    .bind(chatId)
+    .first<InitSession>();
+
+  return row ?? null;
+}
+
+async function saveInitSession(env: Env, chatId: string, step: string, confirmCode: string, resetMode?: string): Promise<void> {
+  if (!env.DB) {
+    return;
+  }
+
+  await env.DB
+    .prepare(
+      `INSERT INTO init_sessions (chat_id, step, confirm_code, reset_mode, created_at)
+       VALUES (?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(chat_id) DO UPDATE SET
+         step = excluded.step,
+         confirm_code = excluded.confirm_code,
+         reset_mode = excluded.reset_mode,
+         created_at = datetime('now')`,
+    )
+    .bind(chatId, step, confirmCode, resetMode ?? null)
+    .run();
+}
+
+async function deleteInitSession(env: Env, chatId: string): Promise<void> {
+  if (!env.DB) {
+    return;
+  }
+
+  await env.DB.prepare("DELETE FROM init_sessions WHERE chat_id = ?").bind(chatId).run();
+}
+
+function isSessionExpired(createdAt: string): boolean {
+  return Date.now() - new Date(createdAt + "Z").getTime() > INIT_SESSION_TIMEOUT_MS;
+}
+
+function isNonNegativeInteger(value: string): boolean {
+  return /^\d+$/.test(value);
+}
+
+// === Init / Reset Handlers ===
+
+async function handleInitCommand(chatId: number | string, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
+  const code = generateConfirmCode();
+  await saveInitSession(env, String(chatId), "confirm", code);
+
+  const text = [
+    "⚠️ <b>Waspada! Fitur Init/Reset</b>",
+    "",
+    "Ini akan mereset progress keuangan kamu.",
+    "(Progress lama tetap tersimpan di database)",
+    "",
+    "Reply dengan kode ini untuk konfirmasi:",
+    `<b>${code}</b>`,
+    "",
+    "Atau ketik /cancel untuk membatalkan.",
+  ].join("\n");
+
+  recordLog(env, "init_started", logDetail({ chatId }), ctx);
+  return createTelegramResponse(chatId, text, { parseMode: "HTML" });
+}
+
+async function handleInitReply(session: InitSession, text: string, chatId: number | string, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
+  if (isSessionExpired(session.created_at)) {
+    await deleteInitSession(env, String(chatId));
+    return createTelegramResponse(chatId, "⏰ Sesi init sudah kadaluarsa. Ketik /init untuk memulai ulang.");
+  }
+
+  if (text.trim() === "/cancel") {
+    await deleteInitSession(env, String(chatId));
+    return createTelegramResponse(chatId, "❌ Init dibatalkan.");
+  }
+
+  if (session.step === "confirm") {
+    if (text.trim().toUpperCase() !== session.confirm_code) {
+      return createTelegramResponse(
+        chatId,
+        `Kode tidak sesuai. Reply dengan kode <b>${session.confirm_code}</b> untuk konfirmasi, atau /cancel untuk batal.`,
+        { parseMode: "HTML" },
+      );
+    }
+
+    await saveInitSession(env, String(chatId), "mode", session.confirm_code);
+    return createTelegramResponse(
+      chatId,
+      [
+        "✅ Kode sesuai! Pilih mode reset:",
+        "",
+        "1) <b>archive</b> — Data lama tetap disimpan, reset dimulai",
+        "2) <b>hard reset</b> — Semua data transaksi dihapus, mulai dari nol",
+        "",
+        "Balas dengan 'archive' atau 'hard reset'.",
+      ].join("\n"),
+      { parseMode: "HTML" },
+    );
+  }
+
+  if (session.step === "mode") {
+    const mode = text.trim().toLowerCase();
+    if (mode !== "archive" && mode !== "hard reset") {
+      return createTelegramResponse(chatId, "Pilih 'archive' atau 'hard reset'.");
+    }
+
+    const resetMode = mode === "hard reset" ? "hard_reset" : "archive";
+    await saveInitSession(env, String(chatId), "amount", session.confirm_code, resetMode);
+
+    if (mode === "hard reset") {
+      return createTelegramResponse(
+        chatId,
+        [
+          "⚠️ <b>Hard Reset</b> akan menghapus SEMUA data:",
+          "• Semua transaksi ledger",
+          "• Semua hutang/piutang",
+          "• Semua check-in habits",
+          "",
+          "Nominal dana awal untuk wallet 'utama'?",
+          "Balas dengan angka (contoh: 500000).",
+        ].join("\n"),
+        { parseMode: "HTML" },
+      );
+    }
+
+    return createTelegramResponse(
+      chatId,
+      "Nominal dana awal untuk wallet 'utama'?\nBalas dengan angka (contoh: 500000).",
+    );
+  }
+
+  if (session.step === "amount") {
+    const raw = text.trim().replace(/[.,]/g, "");
+    if (!isNonNegativeInteger(raw)) {
+      return createTelegramResponse(chatId, "Masukkan angka yang valid tanpa titik/koma (contoh: 500000).");
+    }
+
+    const amount = Number(raw);
+    const mode = session.reset_mode ?? "archive";
+
+    try {
+      await executeInitReset(env, mode as "archive" | "hard_reset", amount);
+      await deleteInitSession(env, String(chatId));
+
+      const modeLabel = mode === "hard_reset" ? "Hard Reset" : "Archive";
+      recordLog(env, "init_completed", logDetail({ mode, amount, chatId }), ctx);
+
+      return createTelegramResponse(
+        chatId,
+        [
+          `✅ <b>${modeLabel} berhasil!</b>`,
+          "",
+          `Wallet "utama" dengan saldo <b>${amount.toLocaleString("id-ID")}</b> sudah siap.`,
+          "Ketik /commands untuk bantuan.",
+        ].join("\n"),
+        { parseMode: "HTML" },
+      );
+    } catch (error) {
+      recordLog(env, "init_error", logDetail({ error: error instanceof Error ? error.message : String(error) }), ctx);
+      return createTelegramResponse(chatId, "❌ Gagal menjalankan init. Silakan coba lagi.");
+    }
+  }
+
+  return createTelegramResponse(chatId, "Terjadi kesalahan. Ketik /init untuk memulai ulang.");
+}
+
+async function executeInitReset(env: Env, mode: "archive" | "hard_reset", amount: number): Promise<void> {
+  if (!env.DB) {
+    throw new Error("D1 DB binding is required");
+  }
+
+  if (mode === "hard_reset") {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM ledger"),
+      env.DB.prepare("DELETE FROM debt_reminders"),
+      env.DB.prepare("DELETE FROM habit_checkins"),
+    ]);
+  }
+
+  const accountName = "assets:wallets:utama";
+  await env.DB.prepare("INSERT OR IGNORE INTO accounts (name, type) VALUES (?, ?)").bind(accountName, "asset").run();
+
+  if (amount > 0) {
+    const incomeAccount = "income:initial_balance";
+    await env.DB
+      .prepare("INSERT OR IGNORE INTO accounts (name, type) VALUES (?, ?)")
+      .bind(incomeAccount, "income")
+      .run();
+
+    await env.DB
+      .prepare(
+        "INSERT INTO ledger (debit_account, credit_account, amount, description, category) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(accountName, incomeAccount, amount, "Initial wallet balance", "initial_balance")
+      .run();
+  }
+}
+
 function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   if (!value || typeof value !== "object") {
     return false;
@@ -178,6 +404,7 @@ function createCommandsResponse(chatId: number | string): Response {
     "• <i>/commands</i> — tampilkan bantuan ini",
     "• <i>/help</i> — tampilkan bantuan ini",
     "• <i>/start</i> — tampilkan bantuan ini",
+    "• <i>/init</i> — reset/init ulang progress keuangan",
   ].join("\n");
 
   return createTelegramResponse(chatId, html, {
@@ -300,6 +527,15 @@ async function handleWebhook(request: Request, env: Env, ctx?: ExecutionContextL
   if (["/commands", "/help", "/start"].includes(text.trim())) {
     recordLog(env, "commands_listed", `chat:${chatId}`, ctx);
     return createCommandsResponse(chatId);
+  }
+
+  if (text.trim() === "/init") {
+    return handleInitCommand(chatId, env, ctx);
+  }
+
+  const session = await getInitSession(env, String(chatId));
+  if (session) {
+    return handleInitReply(session, text, chatId, env, ctx);
   }
 
   if (!env.TELEGRAM_TOKEN) {
@@ -455,15 +691,23 @@ export {
   clearLogs,
   createCommandsResponse,
   createTelegramResponse,
+  deleteInitSession,
+  executeInitReset,
+  generateConfirmCode,
+  getInitSession,
   handleFinanceRequest,
   handleHealth,
+  handleInitCommand,
+  handleInitReply,
   handleLogs,
   handleRequest,
   handleScheduled,
   handleWebhook,
   isTelegramUpdate,
+  isSessionExpired,
   readLogs,
   recordLog,
+  saveInitSession,
   sendAiReply,
 };
-export type { Env, ExecutionContextLike, LogEntry, ScheduledControllerLike, TelegramUpdate };
+export type { Env, ExecutionContextLike, InitSession, LogEntry, ScheduledControllerLike, TelegramUpdate };

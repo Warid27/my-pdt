@@ -967,6 +967,7 @@ describe("handleRequest", () => {
           "• <i>/commands</i> — tampilkan bantuan ini",
           "• <i>/help</i> — tampilkan bantuan ini",
           "• <i>/start</i> — tampilkan bantuan ini",
+          "• <i>/init</i> — reset/init ulang progress keuangan",
         ].join("\n"),
         reply_markup: {
           inline_keyboard: [
