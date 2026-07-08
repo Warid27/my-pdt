@@ -1,4 +1,4 @@
-import { handleRequest, type Env, type ExecutionContextLike } from "../../src/index";
+import { handleRequest, type Env, type ExecutionContextLike } from "../src/index";
 
 export const onRequest: PagesFunction<Env> = (context) => {
   const ctx: ExecutionContextLike = {
