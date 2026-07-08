@@ -38,7 +38,6 @@ type Env = {
   TELEGRAM_REMINDER_CHAT_ID?: string;
   PROVIDERS?: string;
   AUTH_SEEDED_ACCOUNTS?: string;
-  FRONTEND_URL?: string;
   DB?: D1Database;
 };
 
@@ -648,52 +647,24 @@ async function handleScheduled(_controller: ScheduledControllerLike, env: Env, c
   ctx.waitUntil(sendDueReminders(env));
 }
 
-function getCorsHeaders(env: Env, request: Request): Record<string, string> {
-  const origin = request.headers.get("Origin");
-  const allowed = env.FRONTEND_URL?.replace(/\/+$/, "");
-  const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Max-Age": "86400",
-  };
-  if (allowed && origin && origin.replace(/\/+$/, "") === allowed) {
-    headers["Access-Control-Allow-Origin"] = origin;
-    headers["Access-Control-Allow-Credentials"] = "true";
-  }
-  return headers;
-}
-
 async function handleRequest(request: Request, env: Env, ctx?: ExecutionContextLike): Promise<Response> {
   const url = new URL(request.url);
-  const corsHeaders = getCorsHeaders(env, request);
-
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
-  }
-
-  let response: Response;
 
   if (request.method === "GET" && url.pathname === "/health") {
-    response = await handleHealth();
+    return handleHealth();
   } else if (request.method === "GET" && url.pathname === "/logs") {
-    response = await handleLogs(url, env);
+    return handleLogs(url, env);
   } else if (url.pathname === "/openapi.json") {
-    response = await handleOpenApiRequest(request, env);
+    return handleOpenApiRequest(request, env);
   } else if (url.pathname.startsWith("/api/")) {
-    response = await handleApiRequest(request, env as AuthEnv);
+    return handleApiRequest(request, env as AuthEnv);
   } else if (url.pathname.startsWith("/finance/")) {
-    response = await handleFinanceRequest(request, url, env);
+    return handleFinanceRequest(request, url, env);
   } else if (request.method === "POST" && url.pathname === "/webhook") {
-    response = await handleWebhook(request, env, ctx);
+    return handleWebhook(request, env, ctx);
   } else {
-    response = new Response("Not Found", { status: 404 });
+    return new Response("Not Found", { status: 404 });
   }
-
-  const newResponse = new Response(response.body, response);
-  for (const [key, value] of Object.entries(corsHeaders)) {
-    newResponse.headers.set(key, value);
-  }
-  return newResponse;
 }
 
 export default {
