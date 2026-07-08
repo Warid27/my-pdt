@@ -4,13 +4,13 @@ type Env = {
 
 function getCorsHeaders(env: Env, request: Request): Record<string, string> {
   const origin = request.headers.get("Origin");
-  const allowed = env.FRONTEND_URL?.replace(/\/+$/, "");
+  const allowed = env.FRONTEND_URL?.replace(/\\/+$/, "");
   const headers: Record<string, string> = {
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400",
   };
-  if (allowed && origin && origin.replace(/\/+$/, "") === allowed) {
+  if (allowed && origin && origin.replace(/\\/+$/, "") === allowed) {
     headers["Access-Control-Allow-Origin"] = origin;
     headers["Access-Control-Allow-Credentials"] = "true";
   }
