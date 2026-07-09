@@ -18,6 +18,33 @@ const accessTokenLifetimeMs = 15 * 60 * 1000;
 const refreshTokenLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 const maxPageSize = 100;
 
+const COOKIE_DOMAIN = ".warid.web.id";
+
+function buildCookieHeaders(
+  accessToken: string,
+  refreshToken: string,
+  accessTokenExpiresAt: string,
+  refreshTokenExpiresAt: string,
+): string[] {
+  const accessMaxAge = Math.floor((new Date(accessTokenExpiresAt).getTime() - Date.now()) / 1000);
+  const refreshMaxAge = Math.floor((new Date(refreshTokenExpiresAt).getTime() - Date.now()) / 1000);
+  const isSecure = true;
+  const cookieFlags = `Path=/; SameSite=Lax; HttpOnly; Max-Age=`;
+  const secureFlag = isSecure ? "; Secure" : "";
+  return [
+    `access_token=${accessToken}; ${cookieFlags}${accessMaxAge}; Domain=${COOKIE_DOMAIN}${secureFlag}`,
+    `refresh_token=${refreshToken}; ${cookieFlags}${refreshMaxAge}; Domain=${COOKIE_DOMAIN}${secureFlag}`,
+  ];
+}
+
+function clearCookieHeaders(): string[] {
+  const domain = `; Domain=${COOKIE_DOMAIN}`;
+  return [
+    `access_token=; Path=/; SameSite=Lax; HttpOnly; Max-Age=0${domain}`,
+    `refresh_token=; Path=/; SameSite=Lax; HttpOnly; Max-Age=0${domain}`,
+  ];
+}
+
 type SeededAccountInput = {
   email: string;
   password: string;
@@ -422,7 +449,9 @@ async function authenticateRequest(request: Request, env: AuthEnv): Promise<ApiR
   }
 
   const header = request.headers.get("authorization") ?? request.headers.get("Authorization");
-  const token = header?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const bearerToken = header?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const cookieToken = request.headers.get("cookie")?.match(/(?:^|;\s*)access_token=([^;]*)/)?.[1];
+  const token = bearerToken ?? cookieToken;
   if (!token) {
     return errorResponse("Missing bearer access token", 401, "unauthorized");
   }
@@ -475,13 +504,21 @@ async function handleLogin(request: Request, env: AuthEnv): Promise<Response> {
   }
 
   const session = await createAuthSession(env, account.id);
-  return jsonResponse({
+  const cookieHeaders = buildCookieHeaders(
+    session.accessToken, session.refreshToken,
+    session.accessTokenExpiresAt, session.refreshTokenExpiresAt,
+  );
+  const response = jsonResponse({
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     accessTokenExpiresAt: session.accessTokenExpiresAt,
     refreshTokenExpiresAt: session.refreshTokenExpiresAt,
     account: accountToApi(account),
   });
+  for (const header of cookieHeaders) {
+    response.headers.append("Set-Cookie", header);
+  }
+  return response;
 }
 
 async function handleRefresh(request: Request, env: AuthEnv): Promise<Response> {
@@ -511,13 +548,21 @@ async function handleRefresh(request: Request, env: AuthEnv): Promise<Response> 
     return errorResponse("Account not found", 404, "notFound");
   }
 
-  return jsonResponse({
+  const cookieHeaders = buildCookieHeaders(
+    rotated.accessToken, rotated.refreshToken,
+    rotated.accessTokenExpiresAt, rotated.refreshTokenExpiresAt,
+  );
+  const response = jsonResponse({
     accessToken: rotated.accessToken,
     refreshToken: rotated.refreshToken,
     accessTokenExpiresAt: rotated.accessTokenExpiresAt,
     refreshTokenExpiresAt: rotated.refreshTokenExpiresAt,
     account: accountToApi(account),
   });
+  for (const header of cookieHeaders) {
+    response.headers.append("Set-Cookie", header);
+  }
+  return response;
 }
 
 async function handleLogout(request: Request, env: AuthEnv): Promise<Response> {
@@ -544,7 +589,11 @@ async function handleLogout(request: Request, env: AuthEnv): Promise<Response> {
         .bind(session.id)
         .run();
     }
-    return new Response(null, { status: 204 });
+    const response = new Response(null, { status: 204 });
+    for (const header of clearCookieHeaders()) {
+      response.headers.append("Set-Cookie", header);
+    }
+    return response;
   }
 
   if (bearerToken) {
@@ -555,7 +604,11 @@ async function handleLogout(request: Request, env: AuthEnv): Promise<Response> {
         .bind(session.id)
         .run();
     }
-    return new Response(null, { status: 204 });
+    const response = new Response(null, { status: 204 });
+    for (const header of clearCookieHeaders()) {
+      response.headers.append("Set-Cookie", header);
+    }
+    return response;
   }
 
   return errorResponse("refreshToken or bearer access token is required", 400, "invalidRequest");
